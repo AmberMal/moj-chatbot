@@ -23,7 +23,7 @@ export default function Home() {
 
   return (
     <main className="chat">
-      <h1>Mój chatbot</h1>
+      <h1> Amber</h1>
 
       <div className="messages" aria-label="Rozmowa" aria-live="polite">
         {messages.length === 0 && (
