@@ -16,3 +16,9 @@ h1 { margin: 0; }
 .hint { margin: auto; color: #888; }
 .error { margin: 0; padding: 10px 14px; border: 1px solid #e0a0a0; border-radius: 8px; background: #fdecec; color: #8a1f1f; }
 .composer button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* Logowanie i wyjście */
+.login { display: flex; flex-direction: column; gap: 10px; }
+.login label { font-weight: 600; }
+.toolbar { display: flex; justify-content: flex-end; }
+.logout { padding: 6px 12px; border: 1px solid #ccc; border-radius: 6px; background: #fff; color: #222; font-size: 14px; cursor: pointer; }

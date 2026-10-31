@@ -6,9 +6,21 @@ import {
   toUIMessageStream,
   type UIMessage,
 } from "ai";
+import { SESSION_COOKIE, getAuthConfig, isSessionValid, readCookie } from "../../../lib/auth";
 
 // Ten plik działa tylko na serwerze. Klucz API nigdy nie trafia do przeglądarki.
 export async function POST(req: Request) {
+  // 1. Najpierw sesja. Bez ważnej sesji: 401 i żadnego wywołania modelu.
+  const authConfig = getAuthConfig();
+  if (!isSessionValid(readCookie(req, SESSION_COOKIE), authConfig)) {
+    return new Response(
+      authConfig
+        ? "Brak dostępu: zaloguj się hasłem warsztatowym."
+        : "Dostęp zablokowany: brak konfiguracji CHAT_PASSWORD / SESSION_SECRET.",
+      { status: 401 },
+    );
+  }
+
   const apiKey = process.env.OPENROUTER_API_KEY;
   const modelId = process.env.OPENROUTER_MODEL;
 
