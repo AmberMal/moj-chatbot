@@ -30,6 +30,7 @@ export async function POST(req: Request) {
 
   const result = streamText({
     model: openrouter(modelId),
+    instructions: "Masz na imię Amber. Gdy ktoś zapyta o Twoje imię, przedstaw się jako Amber.",
     messages: await convertToModelMessages(messages),
   });
 
