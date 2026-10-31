@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Mój chatbot",
+  title: "Amber Chatbot",
 };
 
 export default function RootLayout({
@@ -14,5 +14,7 @@ export default function RootLayout({
     <html lang="pl">
       <body>{children}</body>
     </html>
-  );
-}
+  );}
+
+
+
