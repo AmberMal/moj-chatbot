@@ -6,3 +6,13 @@ h1 { margin: 0; }
 .composer { display: flex; gap: 8px; }
 .composer input { flex: 1; padding: 10px; border: 1px solid #ccc; border-radius: 6px; font-size: 16px; }
 .composer button { padding: 10px 18px; border: 0; border-radius: 6px; background: #222; color: #fff; font-size: 16px; cursor: pointer; }
+
+/* Czat */
+.messages { display: flex; flex-direction: column; gap: 10px; padding: 16px; }
+.message { max-width: 85%; padding: 10px 14px; border-radius: 12px; white-space: pre-wrap; line-height: 1.45; }
+.message.user { align-self: flex-end; background: #222; color: #fff; }
+.message.assistant { align-self: flex-start; background: #f0f0f0; color: #222; }
+.message.pending { color: #777; font-style: italic; }
+.hint { margin: auto; color: #888; }
+.error { margin: 0; padding: 10px 14px; border: 1px solid #e0a0a0; border-radius: 8px; background: #fdecec; color: #8a1f1f; }
+.composer button:disabled { opacity: 0.5; cursor: not-allowed; }
