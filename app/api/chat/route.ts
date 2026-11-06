@@ -7,6 +7,7 @@ import {
   type UIMessage,
 } from "ai";
 import { SESSION_COOKIE, getAuthConfig, isSessionValid, readCookie } from "../../../lib/auth";
+import { AMBER_INSTRUCTIONS } from "../../../lib/amber-instructions";
 
 // Ten plik działa tylko na serwerze. Klucz API nigdy nie trafia do przeglądarki.
 export async function POST(req: Request) {
@@ -42,7 +43,8 @@ export async function POST(req: Request) {
 
   const result = streamText({
     model: openrouter(modelId),
-    instructions: "Masz na imię Amber. Gdy ktoś zapyta o Twoje imię, przedstaw się jako Amber.",
+    // Instrukcja systemowa (persona, wiedza o firmie, zasady, przykłady) – tylko po stronie serwera.
+    instructions: AMBER_INSTRUCTIONS,
     messages: await convertToModelMessages(messages),
   });
 
