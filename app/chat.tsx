@@ -4,6 +4,11 @@ import { useChat } from "@ai-sdk/react";
 import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
 
+// Limit długości wiadomości klienta – taki sam jak na serwerze (lib/amber-history.ts).
+const MAX_MESSAGE_CHARS = 4000;
+// Informacja o limicie pokazuje się dopiero przy długiej wiadomości.
+const SHOW_LIMIT_FROM = 3500;
+
 export default function Chat() {
   const router = useRouter();
   const [input, setInput] = useState("");
@@ -68,12 +73,21 @@ export default function Chat() {
           placeholder="Napisz wiadomość..."
           aria-label="Wiadomość"
           value={input}
+          maxLength={MAX_MESSAGE_CHARS}
           onChange={(event) => setInput(event.target.value)}
         />
         <button type="submit" disabled={!canSend}>
           {isBusy ? "Czekaj…" : "Wyślij"}
         </button>
       </form>
+
+      {input.length >= SHOW_LIMIT_FROM && (
+        <p className="hint" aria-live="polite">
+          {input.length >= MAX_MESSAGE_CHARS
+            ? `Osiągnięto limit ${MAX_MESSAGE_CHARS} znaków.`
+            : `Limit wiadomości: ${input.length} / ${MAX_MESSAGE_CHARS} znaków.`}
+        </p>
+      )}
     </>
   );
 }

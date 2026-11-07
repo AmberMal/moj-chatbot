@@ -1,24 +1,32 @@
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import {
-  convertToModelMessages,
   createUIMessageStream,
   createUIMessageStreamResponse,
+  type ModelMessage,
   type UIMessage,
 } from "ai";
 import { SESSION_COOKIE, getAuthConfig, isSessionValid, readCookie } from "../../../lib/auth";
 import { AMBER_INSTRUCTIONS } from "../../../lib/amber-instructions";
 import { generateAmberOutput, type AmberOutput } from "../../../lib/amber-output";
+import {
+  checkChatHistory,
+  deriveHistoryKey,
+  sessionIdFromToken,
+  signAssistantTurn,
+} from "../../../lib/amber-history";
 
 // Metadane wiadomości Amber (wewnętrzna logika aplikacji).
 // UWAGA: trafiają do przeglądarki razem z wiadomością, więc NIE są poufne.
-type AmberMetadata = Omit<AmberOutput, "draft">;
+// `sig` = podpis HMAC odpowiedzi (W3) – chroni historię przed sfałszowaniem.
+type AmberMetadata = Omit<AmberOutput, "draft"> & { sig: string };
 type AmberUIMessage = UIMessage<AmberMetadata>;
 
 // Ten plik działa tylko na serwerze. Klucz API nigdy nie trafia do przeglądarki.
 export async function POST(req: Request) {
   // 1. Najpierw sesja. Bez ważnej sesji: 401 i żadnego wywołania modelu.
   const authConfig = getAuthConfig();
-  if (!isSessionValid(readCookie(req, SESSION_COOKIE), authConfig)) {
+  const sessionToken = readCookie(req, SESSION_COOKIE);
+  if (!authConfig || !sessionToken || !isSessionValid(sessionToken, authConfig)) {
     return new Response(
       authConfig
         ? "Brak dostępu: zaloguj się hasłem warsztatowym."
@@ -44,6 +52,21 @@ export async function POST(req: Request) {
     return new Response("Brak wiadomości do wysłania.", { status: 400 });
   }
 
+  // W3: kontrola danych z przeglądarki i podpisów odpowiedzi Amber – PRZED wywołaniem modelu.
+  const historyKey = deriveHistoryKey(authConfig.secret);
+  const sessionId = sessionIdFromToken(sessionToken);
+  const history = checkChatHistory(messages, { key: historyKey, sessionId });
+  if (!history.ok) {
+    console.warn(`[Amber] Odrzucono historię rozmowy (${history.reason}).`);
+    return new Response(history.message, { status: 400 });
+  }
+
+  // Do modelu trafia wyłącznie sprawdzony tekst (role user/assistant), bez metadanych i plików.
+  const modelMessages: ModelMessage[] = history.turns.map((turn) => ({
+    role: turn.role,
+    content: turn.text,
+  }));
+
   const openrouter = createOpenRouter({ apiKey });
 
   // 2. Structured output: model musi zwrócić JSON zgodny ze schematem,
@@ -52,7 +75,7 @@ export async function POST(req: Request) {
     model: openrouter(modelId),
     // Instrukcja systemowa (persona, wiedza o firmie, zasady, format wyniku) – tylko po stronie serwera.
     instructions: AMBER_INSTRUCTIONS,
-    messages: await convertToModelMessages(messages),
+    messages: modelMessages,
     abortSignal: req.signal, // „Wyjdź” / przerwanie połączenia zatrzymuje też zapytanie do modelu
   });
 
@@ -66,7 +89,16 @@ export async function POST(req: Request) {
   console.log("[Amber] Sprawdzony wynik:", JSON.stringify(result.output));
 
   // 4. Klient widzi tylko treść pola draft. Pozostałe pola to metadane wiadomości.
-  const { draft, ...metadata } = result.output;
+  const { draft, ...outputMeta } = result.output;
+
+  // W3: podpis nowej odpowiedzi – obejmuje sesję, całą rozmowę i metadane.
+  const sig = signAssistantTurn(
+    historyKey,
+    sessionId,
+    [...history.turns, { role: "assistant", text: draft }],
+    outputMeta,
+  );
+  const metadata: AmberMetadata = { ...outputMeta, sig };
 
   const stream = createUIMessageStream<AmberUIMessage>({
     execute: ({ writer }) => {
