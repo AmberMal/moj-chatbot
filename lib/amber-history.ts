@@ -9,7 +9,8 @@
 // 3. Klucz do podpisów jest osobny – wyprowadzony z SESSION_SECRET metodą HKDF
 //    z etykietą "amber-history-v1" (inny niż klucz ciasteczka sesji).
 // 4. Warsztat 3: dwa rodzaje podpisanych odpowiedzi Amber:
-//    – odpowiedź JSON (dotychczasowy /api/chat): metadane category/priority/needs_review, podpis v4;
+//    – odpowiedź JSON z wcześniejszej wersji czatu (przed Warsztatem 3): metadane category/priority/needs_review,
+//      podpis v4 – nadal sprawdzany, żeby wcześniej zaczęte rozmowy działały dalej;
 //    – odpowiedź czatu z /api/agent (mode=chat): metadane `kind: "chat"`, podpis v5.
 //    Rodzaj i wersja są częścią podpisanych danych – podpisu jednego rodzaju nie da się
 //    wykorzystać dla drugiego (dopisanie lub usunięcie pól zmienia podpisywane dane).

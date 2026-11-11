@@ -96,7 +96,6 @@ export function formatFetchedAt(date: Date): string {
 }
 
 // Sprawdzone tury → wiadomości dla modelu (tylko tekst; zdjęcie klienta jako część „image”).
-// Ta sama zasada co w app/api/chat/route.ts.
 export function toModelMessages(turns: ChatTurn[]): ModelMessage[] {
   return turns.map((turn): ModelMessage => {
     if (turn.role === "assistant") {

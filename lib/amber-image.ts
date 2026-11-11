@@ -1,5 +1,5 @@
 // Lekcja 3 (B): generowanie obrazu – sprawdzanie opisu, wywołanie modelu i komunikaty błędów.
-// Plik działa tylko na serwerze (endpoint /api/image). Model obrazów: Nano Banana 2 przez OpenRouter.
+// Plik działa tylko na serwerze (narzędzie generujObraz w /api/agent). Model obrazów: Nano Banana 2 przez OpenRouter.
 
 import {
   APICallError,
@@ -148,7 +148,7 @@ export function createImageTool({
         additionalProperties: false,
       },
       {
-        // Ten sam warunek co w /api/image: tekst 1–500 znaków. Zły opis → błąd narzędzia, model obrazów nie jest wywoływany.
+        // Ten sam warunek co checkImagePrompt: tekst 1–500 znaków. Zły opis → błąd narzędzia, model obrazów nie jest wywoływany.
         validate: (value) => {
           const keys = typeof value === "object" && value !== null && !Array.isArray(value) ? Object.keys(value) : null;
           const checked = keys && keys.length === 1 && keys[0] === "opis"

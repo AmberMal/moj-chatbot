@@ -31,7 +31,7 @@ export async function POST(req: Request) {
       if (!apiKey || !modelId) return null;
       const openrouter = createOpenRouter({ apiKey });
 
-      // Generowanie obrazu: osobny klient, który odczytuje pole "model" z odpowiedzi API (jak w /api/image).
+      // Generowanie obrazu: osobny klient, który odczytuje pole "model" z odpowiedzi API (jeśli API je poda).
       let apiImageModel: string | undefined;
       const imageProvider = createOpenRouter({
         apiKey,
