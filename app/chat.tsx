@@ -365,7 +365,7 @@ export default function Chat() {
         })}
 
         {waitingForContent && (
-          <div className="message assistant pending">Model pisze…</div>
+          <div className="message assistant pending">Amber pisze…</div>
         )}
       </div>
 
