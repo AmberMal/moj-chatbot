@@ -20,6 +20,21 @@ export const HISTORY_PRIORITIES = ["normal", "high"] as const;
 
 const KEY_LABEL = "amber-history-v1";
 const META_KEYS = ["category", "priority", "needs_review", "sig"] as const;
+// Lekcja 3: opcjonalna data pobrania źródeł (tylko gdy odpowiedź ma źródła).
+// Lekcja 3: opcjonalna lista użytych narzędzi (etykiety w czacie).
+// `model` = identyfikator modelu z odpowiedzi API (pokazywany pod odpowiedzią o zdjęciu).
+const OPTIONAL_META_KEYS = ["fetchedAt", "tools", "model"] as const;
+
+// Lekcja 3 (Vision): zdjęcia od klienta – tylko jpg/png/webp przesłane bezpośrednio (data:),
+// najwyżej 1 w wiadomości i tylko w najnowszych wiadomościach klienta (po ostatniej odpowiedzi Amber).
+export const ALLOWED_IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp"] as const;
+// Limit długości zakodowanego zdjęcia (~2,2 MB po zdekodowaniu) – mieści się w limicie Vercel 4,5 MB.
+export const MAX_IMAGE_DATA_URL_CHARS = 3_000_000;
+export const HISTORY_TOOL_NAMES = ["wyszukiwanie", "aktualnyCzas", "sprawdzObszar", "informacjeOUrzadzeniu"] as const;
+export const MAX_HISTORY_SOURCES = 6;
+
+// Źródło z wyszukiwania (część „source-url” odpowiedzi Amber).
+export type TurnSource = { url: string; title: string };
 
 export type TurnMeta = {
   category: (typeof HISTORY_CATEGORIES)[number];
@@ -27,7 +42,12 @@ export type TurnMeta = {
   needs_review: boolean;
 };
 
-export type ChatTurn = { role: "user" | "assistant"; text: string };
+// `image` (tylko wiadomości klienta) NIE wchodzi do podpisu – podpis obejmuje role i tekst.
+export type ChatTurn = {
+  role: "user" | "assistant";
+  text: string;
+  image?: { mediaType: string; base64: string };
+};
 
 export type HistoryCheck =
   | { ok: true; turns: ChatTurn[] }
@@ -58,13 +78,26 @@ export function sessionIdFromToken(token: string): string {
   return lastDot > 0 ? token.slice(0, lastDot) : "";
 }
 
-// Jednoznaczne kodowanie: JSON z tablic [rola, tekst] w kolejności rozmowy.
-function signaturePayload(sessionId: string, history: ChatTurn[], meta: TurnMeta): string {
+// Jednoznaczne kodowanie: JSON z tablic [rola, tekst] w kolejności rozmowy,
+// źródeł tej odpowiedzi [adres, tytuł] i metadanych.
+// v2 = lekcja 3 (źródła + data pobrania), v3 = lista użytych narzędzi, v4 = identyfikator modelu.
+function signaturePayload(
+  sessionId: string,
+  history: ChatTurn[],
+  meta: TurnMeta,
+  sources: TurnSource[],
+  fetchedAt: string,
+  tools: string[],
+  model: string,
+): string {
   return JSON.stringify({
-    v: 1,
+    v: 4,
     sid: sessionId,
     history: history.map((turn) => [turn.role, turn.text]),
-    meta: [meta.category, meta.priority, meta.needs_review],
+    sources: sources.map((source) => [source.url, source.title]),
+    tools,
+    model,
+    meta: [meta.category, meta.priority, meta.needs_review, fetchedAt],
   });
 }
 
@@ -74,9 +107,13 @@ export function signAssistantTurn(
   sessionId: string,
   history: ChatTurn[],
   meta: TurnMeta,
+  sources: TurnSource[] = [],
+  fetchedAt = "",
+  tools: string[] = [],
+  model = "",
 ): string {
   return createHmac("sha256", key)
-    .update(signaturePayload(sessionId, history, meta))
+    .update(signaturePayload(sessionId, history, meta, sources, fetchedAt, tools, model))
     .digest("base64url");
 }
 
@@ -108,17 +145,94 @@ function readTextParts(parts: unknown): string | null {
   return text;
 }
 
-function readAssistantMeta(metadata: unknown): (TurnMeta & { sig: string }) | null {
+// Wiadomość klienta: części tekstowe + najwyżej jedno zdjęcie (jpg/png/webp jako data:).
+function readUserParts(
+  parts: unknown,
+): { text: string; image?: { mediaType: string; base64: string } } | null {
+  if (!Array.isArray(parts) || parts.length === 0) return null;
+  let text = "";
+  let image: { mediaType: string; base64: string } | undefined;
+  for (const part of parts) {
+    if (!isPlainObject(part)) return null;
+    if (part.type === "text" && typeof part.text === "string") {
+      text += part.text;
+      continue;
+    }
+    if (part.type !== "file" || image) return null;
+    const { mediaType, url } = part;
+    if (typeof mediaType !== "string" || !(ALLOWED_IMAGE_TYPES as readonly string[]).includes(mediaType)) return null;
+    if (typeof url !== "string" || url.length > MAX_IMAGE_DATA_URL_CHARS) return null;
+    const prefix = `data:${mediaType};base64,`;
+    if (!url.startsWith(prefix)) return null;
+    const base64 = url.slice(prefix.length);
+    if (base64.length === 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(base64)) return null;
+    image = { mediaType, base64 };
+  }
+  return image ? { text, image } : { text };
+}
+
+function isHttpUrl(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  try {
+    const protocol = new URL(value).protocol;
+    return protocol === "https:" || protocol === "http:";
+  } catch {
+    return false;
+  }
+}
+
+// Odpowiedź Amber: części tekstowe + opcjonalne części „source-url” (adres http/https).
+function readAssistantParts(parts: unknown): { text: string; sources: TurnSource[] } | null {
+  if (!Array.isArray(parts) || parts.length === 0) return null;
+  let text = "";
+  let hasText = false;
+  const sources: TurnSource[] = [];
+  for (const part of parts) {
+    if (!isPlainObject(part)) return null;
+    if (part.type === "text" && typeof part.text === "string") {
+      text += part.text;
+      hasText = true;
+    } else if (part.type === "source-url" && isHttpUrl(part.url)) {
+      const title = part.title === undefined ? "" : part.title;
+      if (typeof title !== "string") return null;
+      sources.push({ url: part.url, title });
+    } else {
+      return null;
+    }
+  }
+  if (!hasText || sources.length > MAX_HISTORY_SOURCES) return null;
+  return { text, sources };
+}
+
+function readAssistantMeta(
+  metadata: unknown,
+): (TurnMeta & { sig: string; fetchedAt: string; tools: string[]; model: string }) | null {
   if (!isPlainObject(metadata)) return null;
   const keys = Object.keys(metadata);
-  if (keys.length !== META_KEYS.length) return null;
-  if (!keys.every((key) => (META_KEYS as readonly string[]).includes(key))) return null;
-  const { category, priority, needs_review, sig } = metadata;
+  const allowed = [...META_KEYS, ...OPTIONAL_META_KEYS] as readonly string[];
+  if (!keys.every((key) => allowed.includes(key))) return null;
+  if (!META_KEYS.every((key) => keys.includes(key))) return null;
+  const { category, priority, needs_review, sig, fetchedAt = "", tools = [], model = "" } = metadata;
+  if (typeof fetchedAt !== "string" || fetchedAt.length > 40) return null;
+  if (typeof model !== "string" || model.length > 120) return null;
+  if (
+    !Array.isArray(tools) ||
+    tools.length > HISTORY_TOOL_NAMES.length ||
+    new Set(tools).size !== tools.length ||
+    !tools.every((name) => (HISTORY_TOOL_NAMES as readonly unknown[]).includes(name))
+  ) {
+    return null;
+  }
   if (typeof category !== "string" || !(HISTORY_CATEGORIES as readonly string[]).includes(category)) return null;
   if (typeof priority !== "string" || !(HISTORY_PRIORITIES as readonly string[]).includes(priority)) return null;
   if (typeof needs_review !== "boolean") return null;
   if (typeof sig !== "string" || sig.length === 0) return null;
-  return { category, priority, needs_review, sig } as TurnMeta & { sig: string };
+  return { category, priority, needs_review, sig, fetchedAt, tools, model } as TurnMeta & {
+    sig: string;
+    fetchedAt: string;
+    tools: string[];
+    model: string;
+  };
 }
 
 // Sprawdza całą historię. Zwraca wyłącznie czysty tekst (role + treść) do przekazania modelowi.
@@ -145,23 +259,34 @@ export function checkChatHistory(
       return fail(`message-${i}-role-${String(role)}`, HISTORY_MESSAGES.format);
     }
 
-    const text = readTextParts(message.parts);
-    if (text === null) return fail(`message-${i}-parts-not-text`, HISTORY_MESSAGES.format);
-
     if (role === "user") {
-      if (text.length > MAX_USER_MESSAGE_CHARS) {
+      const user = readUserParts(message.parts);
+      if (user === null) return fail(`message-${i}-parts-not-text`, HISTORY_MESSAGES.format);
+      if (user.text.length > MAX_USER_MESSAGE_CHARS) {
         return fail(`message-${i}-too-long`, HISTORY_MESSAGES.tooLong);
       }
-      turns.push({ role, text });
+      turns.push(user.image ? { role, text: user.text, image: user.image } : { role, text: user.text });
       continue;
     }
 
-    // Odpowiedź Amber: musi mieć poprawny podpis obejmujący całą rozmowę do tego miejsca.
+    // Odpowiedź Amber: tekst (+ ewentualne źródła) i poprawny podpis obejmujący całą rozmowę.
+    const assistant = readAssistantParts(message.parts);
+    if (assistant === null) return fail(`message-${i}-parts-not-text`, HISTORY_MESSAGES.format);
+
     const meta = readAssistantMeta(message.metadata);
     if (!meta) return fail(`message-${i}-bad-metadata`, HISTORY_MESSAGES.tampered);
 
-    turns.push({ role, text });
-    const expected = signAssistantTurn(key, sessionId, turns, meta);
+    turns.push({ role, text: assistant.text });
+    const expected = signAssistantTurn(
+      key,
+      sessionId,
+      turns,
+      meta,
+      assistant.sources,
+      meta.fetchedAt,
+      meta.tools,
+      meta.model,
+    );
     if (!signatureMatches(expected, meta.sig)) {
       return fail(`message-${i}-bad-signature`, HISTORY_MESSAGES.tampered);
     }
@@ -169,6 +294,12 @@ export function checkChatHistory(
 
   if (turns[turns.length - 1].role !== "user") {
     return fail("last-message-not-user", HISTORY_MESSAGES.format);
+  }
+
+  // Zdjęcia tylko w najnowszych wiadomościach klienta (po ostatniej odpowiedzi Amber).
+  const lastAssistant = turns.map((turn) => turn.role).lastIndexOf("assistant");
+  if (turns.some((turn, index) => turn.image && index < lastAssistant)) {
+    return fail("old-message-with-image", HISTORY_MESSAGES.format);
   }
 
   return { ok: true, turns };

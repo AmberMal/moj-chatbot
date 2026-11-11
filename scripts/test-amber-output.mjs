@@ -5,7 +5,8 @@
 
 import { APICallError } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
-import { generateAmberOutput, validateAmberOutput } from "../lib/amber-output.ts";
+import { cleanSources, generateAmberOutput, validateAmberOutput } from "../lib/amber-output.ts";
+import { aktualnyCzas, checkArea, currentTimeInfo, deviceInfo, informacjeOUrzadzeniu, sprawdzObszar } from "../lib/amber-tools.ts";
 
 let passed = 0;
 let failed = 0;
@@ -151,5 +152,162 @@ expectFailure("Przerwanie: limit długości, ale JSON kompletny → interrupted 
 }
 
 // ---------------------------------------------------------------------------
+console.log("\n=== CZĘŚĆ 3 (lekcja 3): źródła z wyszukiwania ===");
+// ---------------------------------------------------------------------------
+
+{
+  const withSources = new MockLanguageModelV4({
+    doGenerate: async () => ({
+      content: [
+        { type: "source", sourceType: "url", id: "1", url: "https://www.example.org/norma", title: "Norma BS EN 50131" },
+        { type: "source", sourceType: "url", id: "2", url: "https://www.example.org/norma", title: "Duplikat" },
+        { type: "source", sourceType: "url", id: "3", url: "javascript:alert(1)", title: "Złośliwy link" },
+        { type: "source", sourceType: "url", id: "4", url: "https://producent.example.com/panel", title: "" },
+        { type: "text", text: JSON.stringify(VALID) },
+      ],
+      finishReason: { unified: "stop", raw: "stop" },
+      usage,
+      warnings: [],
+    }),
+  });
+  const r = await run(withSources);
+  check("Odpowiedź ze źródłami → przyjęta, źródła zwrócone", r.ok === true && Array.isArray(r.sources),
+    r.ok ? `${r.sources.length} źródła` : `${r.kind} | ${r.details}`);
+  check("Źródła: duplikat usunięty, link javascript: odrzucony", r.ok && r.sources.length === 2,
+    r.ok ? r.sources.map((x) => x.url).join(" , ") : "");
+  check("Źródło bez tytułu → tytuł = nazwa strony", r.ok && r.sources[1]?.title === "producent.example.com",
+    r.ok ? `"${r.sources[1]?.title}"` : "");
+}
+{
+  const r = await run(mockModel(JSON.stringify(VALID)));
+  check("Odpowiedź bez wyszukiwania → pusta lista źródeł", r.ok === true && r.sources.length === 0);
+}
+check("cleanSources odrzuca data:, ftp: i błędne adresy",
+  cleanSources([{ url: "data:text/html,x" }, { url: "ftp://x.org" }, { url: "nie-adres" }, { url: 42 }]).length === 0);
+check("cleanSources ogranicza liczbę źródeł do 6",
+  cleanSources(Array.from({ length: 10 }, (_, i) => ({ url: `https://s${i}.example.com` }))).length === 6);
+
+// ---------------------------------------------------------------------------
+console.log("\n=== CZĘŚĆ 4 (lekcja 3): narzędzie aktualnyCzas i lista narzędzi ===");
+// ---------------------------------------------------------------------------
+{
+  const winter = currentTimeInfo(new Date("2026-11-10T18:50:00Z"));
+  check("aktualnyCzas (zima): 10.11.2026, wtorek, 18:50 czasu Londynu",
+    winter.data === "10.11.2026" && winter.dzienTygodnia === "wtorek" && winter.godzina === "18:50" && winter.strefa === "Europe/London",
+    JSON.stringify(winter));
+  const summer = currentTimeInfo(new Date("2026-07-01T12:00:00Z"));
+  check("aktualnyCzas (lato): czas letni w Londynie = 13:00", summer.godzina === "13:00" && summer.dzienTygodnia === "środa",
+    JSON.stringify(summer));
+}
+{
+  let executed = false;
+  const tool = { ...aktualnyCzas, execute: async (...a) => { executed = true; return aktualnyCzas.execute(...a); } };
+  const twoSteps = new MockLanguageModelV4({
+    doGenerate: [
+      { content: [{ type: "tool-call", toolCallId: "t1", toolName: "aktualnyCzas", input: "{}" }],
+        finishReason: { unified: "tool-calls", raw: "tool_calls" }, usage, warnings: [] },
+      { content: [{ type: "text", text: JSON.stringify({ ...VALID, draft: "Dziś jest wtorek, 10.11.2026." }) }],
+        finishReason: { unified: "stop", raw: "stop" }, usage, warnings: [] },
+    ],
+  });
+  const r = await run(twoSteps, { tools: { aktualnyCzas: tool } });
+  check("Model wywołuje aktualnyCzas, potem zwraca JSON → przyjęte", r.ok === true && executed,
+    r.ok ? `draft: "${r.output.draft}"` : `${r.kind} | ${r.details}`);
+  check("Lista narzędzi = [aktualnyCzas]", r.ok && JSON.stringify(r.tools) === JSON.stringify(["aktualnyCzas"]),
+    r.ok ? JSON.stringify(r.tools) : "");
+  const sent = twoSteps.doGenerateCalls[0]?.tools?.map((t) => t.name) ?? [];
+  check("Narzędzie przekazane do modelu z opisem", sent.includes("aktualnyCzas") &&
+    /dziś|jutr|dni/i.test(twoSteps.doGenerateCalls[0].tools.find((t) => t.name === "aktualnyCzas").description));
+}
+{
+  const both = new MockLanguageModelV4({
+    doGenerate: [
+      { content: [{ type: "tool-call", toolCallId: "t1", toolName: "aktualnyCzas", input: "{}" }],
+        finishReason: { unified: "tool-calls", raw: "tool_calls" }, usage, warnings: [] },
+      { content: [{ type: "source", sourceType: "url", id: "1", url: "https://www.example.org/x", title: "X" },
+                  { type: "text", text: JSON.stringify(VALID) }],
+        finishReason: { unified: "stop", raw: "stop" }, usage, warnings: [] },
+    ],
+  });
+  const r = await run(both, { tools: { aktualnyCzas } });
+  check("Wyszukiwanie + aktualnyCzas → [wyszukiwanie, aktualnyCzas]",
+    r.ok && JSON.stringify(r.tools) === JSON.stringify(["wyszukiwanie", "aktualnyCzas"]), r.ok ? JSON.stringify(r.tools) : "");
+}
+{
+  const r = await run(mockModel(JSON.stringify(VALID)), { tools: { aktualnyCzas } });
+  check("Bez użycia narzędzi → pusta lista (brak etykiet)", r.ok && r.tools.length === 0);
+}
+
+// ---------------------------------------------------------------------------
+console.log("\n=== CZĘŚĆ 5 (lekcja 3): sprawdzObszar i informacjeOUrzadzeniu ===");
+// ---------------------------------------------------------------------------
+const areaCases = [
+  ["SW19 1AA", "w_obszarze", "SW"], ["sw191aa", "w_obszarze", "SW"], ["EC1A 1BB", "w_obszarze", "EC"],
+  ["E1 6AN", "w_obszarze", "E"], ["WD3 1AA", "w_obszarze", "WD"], ["W1A 1AA", "w_obszarze", "W"],
+  ["KT1", "w_obszarze", "KT"], ["RH1 1AA", "do_potwierdzenia", "RH"], ["GU1 1AA", "do_potwierdzenia", "GU"],
+  ["M1 1AE", "poza_obszarem", "M"], ["S1 2AA", "poza_obszarem", "S"], ["B33 8TH", "poza_obszarem", "B"],
+  ["abc", "nieprawidlowy_kod", null], ["", "nieprawidlowy_kod", null], ["12345", "nieprawidlowy_kod", null],
+];
+for (const [code, expected, area] of areaCases) {
+  const r = checkArea(code);
+  check(`sprawdzObszar("${code}") → ${expected}`, r.wynik === expected && r.obszarKodu === area, `${r.wynik}, obszar ${r.obszarKodu}`);
+}
+check("sprawdzObszar: komunikat zawsze wspomina zespół (poza błędnym kodem)",
+  ["SW19 1AA", "RH1 1AA", "M1 1AE"].every((c) => /zespół/.test(checkArea(c).komunikat)));
+
+const brandCases = [
+  ["Texecom", "Texecom"], ["texecom premier elite", "Texecom"], ["AJAX Hub 2", "Ajax"], ["Pyronix Enforcer", "Pyronix"],
+  ["Honeywell Galaxy", null], ["", null],
+];
+for (const [name, expected] of brandCases) {
+  const r = deviceInfo(name);
+  check(`informacjeOUrzadzeniu("${name}") → ${expected ?? "inna marka"}`, r.obslugiwanaMarka === expected, r.komunikat.slice(0, 60) + "…");
+}
+check("informacjeOUrzadzeniu: brak cen w komunikatach",
+  [deviceInfo("Texecom"), deviceInfo("Honeywell")].every((r) => !/£|\bcen/i.test(r.komunikat)));
+
+{
+  const flow = new MockLanguageModelV4({
+    doGenerate: [
+      { content: [{ type: "tool-call", toolCallId: "t1", toolName: "sprawdzObszar", input: JSON.stringify({ kodPocztowy: "SW19 1AA" }) },
+                  { type: "tool-call", toolCallId: "t2", toolName: "informacjeOUrzadzeniu", input: JSON.stringify({ producent: "Texecom" }) }],
+        finishReason: { unified: "tool-calls", raw: "tool_calls" }, usage, warnings: [] },
+      { content: [{ type: "text", text: JSON.stringify(VALID) }], finishReason: { unified: "stop", raw: "stop" }, usage, warnings: [] },
+    ],
+  });
+  const r = await run(flow, { tools: { aktualnyCzas, sprawdzObszar, informacjeOUrzadzeniu } });
+  check("Model wywołuje sprawdzObszar + informacjeOUrzadzeniu → etykiety obu", r.ok &&
+    JSON.stringify(r.tools) === JSON.stringify(["sprawdzObszar", "informacjeOUrzadzeniu"]), r.ok ? JSON.stringify(r.tools) : `${r.kind} | ${r.details}`);
+  const second = flow.doGenerateCalls[1]?.prompt ?? [];
+  const toolMsg = JSON.stringify(second.filter((m) => m.role === "tool"));
+  check("Wyniki narzędzi trafiają do modelu (w_obszarze, Texecom)", toolMsg.includes("w_obszarze") && toolMsg.includes("Texecom"));
+}
+
+// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+console.log("\n=== Lekcja 3 (Vision): zdjęcie i faktycznie użyty model ===");
+// ---------------------------------------------------------------------------
+{
+  const visionModel = new MockLanguageModelV4({
+    doGenerate: async () => ({
+      content: [{ type: "text", text: JSON.stringify(VALID) }],
+      finishReason: { unified: "stop", raw: "stop" },
+      usage,
+      warnings: [],
+      response: { id: "r1", modelId: "google/gemini-3.8-flash-20261001", timestamp: new Date(0) },
+    }),
+  });
+  const B64 = Buffer.from("fikcyjne-zdjecie").toString("base64");
+  const r = await run(visionModel, {
+    messages: [{ role: "user", content: [
+      { type: "text", text: "Co oznacza ten komunikat?" },
+      { type: "image", image: B64, mediaType: "image/jpeg" },
+    ] }],
+  });
+  check("Wynik zawiera model zwrócony przez API (nie wpisany na sztywno)", r.ok && r.modelId === "google/gemini-3.8-flash-20261001", r.ok ? r.modelId : r.details);
+  const sentPrompt = JSON.stringify(visionModel.doGenerateCalls[0]?.prompt ?? []);
+  check("Zdjęcie zostało przekazane do modelu jako część typu file", sentPrompt.includes('"type":"file"') && sentPrompt.includes("image/jpeg"));
+}
+
 console.log(`\nWynik: ${passed} zaliczonych, ${failed} niezaliczonych.`);
 process.exit(failed === 0 ? 0 : 1);

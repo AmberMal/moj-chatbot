@@ -8,9 +8,11 @@ import {
   NoOutputGeneratedError,
   Output,
   generateText,
+  isStepCount,
   jsonSchema,
   type LanguageModel,
   type ModelMessage,
+  type ToolSet,
 } from "ai";
 
 // ---------------------------------------------------------------------------
@@ -126,8 +128,41 @@ export const amberOutputSchema = jsonSchema<AmberOutput>(AMBER_OUTPUT_JSON_SCHEM
 
 export type AmberFailureKind = "invalid_output" | "refusal" | "interrupted" | "provider_error";
 
+// Źródło z wyszukiwania w internecie (lekcja 3). Tylko adresy http(s).
+export type AmberSource = { url: string; title: string };
+
+export const MAX_SOURCES = 6;
+
+// Bezpieczne źródła: tylko http/https (bez javascript: itp.), bez duplikatów, z limitem.
+export function cleanSources(raw: Array<{ url?: unknown; title?: unknown }>): AmberSource[] {
+  const seen = new Set<string>();
+  const out: AmberSource[] = [];
+  for (const item of raw) {
+    if (typeof item.url !== "string") continue;
+    let parsed: URL;
+    try {
+      parsed = new URL(item.url);
+    } catch {
+      continue;
+    }
+    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") continue;
+    const url = parsed.toString();
+    if (seen.has(url)) continue;
+    seen.add(url);
+    const title =
+      typeof item.title === "string" && item.title.trim() ? item.title.trim().slice(0, 200) : parsed.hostname;
+    out.push({ url, title });
+    if (out.length >= MAX_SOURCES) break;
+  }
+  return out;
+}
+
+// Lekcja 3: nazwy użytych narzędzi (do etykiet w czacie), w stałej kolejności.
+export type AmberToolName = "wyszukiwanie" | "aktualnyCzas" | "sprawdzObszar" | "informacjeOUrzadzeniu";
+const FUNCTION_TOOL_NAMES = ["aktualnyCzas", "sprawdzObszar", "informacjeOUrzadzeniu"] as const;
+
 export type AmberResult =
-  | { ok: true; output: AmberOutput }
+  | { ok: true; output: AmberOutput; sources: AmberSource[]; tools: AmberToolName[]; modelId: string }
   | { ok: false; kind: AmberFailureKind; message: string; details: string };
 
 // Komunikaty dla użytkownika (po polsku). Szczegóły techniczne idą tylko do logów serwera.
@@ -153,12 +188,14 @@ export async function generateAmberOutput({
   messages,
   abortSignal,
   maxRetries,
+  tools,
 }: {
   model: LanguageModel;
   instructions: string;
   messages: ModelMessage[];
   abortSignal?: AbortSignal;
   maxRetries?: number;
+  tools?: ToolSet;
 }): Promise<AmberResult> {
   try {
     const result = await generateText({
@@ -166,6 +203,9 @@ export async function generateAmberOutput({
       instructions,
       messages,
       output: Output.object({ schema: amberOutputSchema }),
+      // Lekcja 3: narzędzia (np. wyszukiwanie) + kilka kroków; wynik JSON też jest krokiem.
+      tools,
+      stopWhen: isStepCount(5),
       abortSignal,
       maxRetries,
     });
@@ -187,7 +227,24 @@ export async function generateAmberOutput({
       return fail("invalid_output", check.errors.join(" "));
     }
 
-    return { ok: true, output: check.value };
+    // Źródła ze wszystkich kroków (wyszukiwanie w internecie), oczyszczone.
+    const sources = cleanSources(
+      result.steps.flatMap((step) => step.sources).filter((source) => source.sourceType === "url"),
+    );
+
+    // Użyte narzędzia: aktualnyCzas z wywołań narzędzi; wyszukiwanie wykonuje OpenRouter
+    // po swojej stronie, więc rozpoznajemy je po źródłach.
+    const calledNames = new Set(result.steps.flatMap((step) => step.toolCalls.map((call) => call.toolName)));
+    const usedTools: AmberToolName[] = [];
+    if (sources.length > 0) usedTools.push("wyszukiwanie");
+    for (const name of FUNCTION_TOOL_NAMES) {
+      if (calledNames.has(name)) usedTools.push(name);
+    }
+
+    // Identyfikator modelu z odpowiedzi API (nie wpisany na sztywno).
+    const modelId = typeof result.response?.modelId === "string" ? result.response.modelId.slice(0, 120) : "";
+
+    return { ok: true, output: check.value, sources, tools: usedTools, modelId };
   } catch (error) {
     if (abortSignal?.aborted || isAbortError(error)) {
       return fail("interrupted", "Połączenie zostało przerwane (abort).");

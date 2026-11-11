@@ -22,3 +22,37 @@ h1 { margin: 0; }
 .login label { font-weight: 600; }
 .toolbar { display: flex; justify-content: flex-end; }
 .logout { padding: 6px 12px; border: 1px solid #ccc; border-radius: 6px; background: #fff; color: #222; font-size: 14px; cursor: pointer; }
+
+/* Lekcja 3: lista źródeł pod odpowiedzią Amber */
+.sources { margin-top: 10px; padding-top: 8px; border-top: 1px solid #ddd; font-size: 14px; white-space: normal; }
+.sources ul { margin: 4px 0; padding-left: 18px; }
+.sources a { color: #1a4fa0; word-break: break-word; }
+.sources small { color: #777; }
+
+/* Lekcja 3: etykiety użytych narzędzi nad odpowiedzią Amber */
+.tool-labels { display: flex; gap: 6px; margin-bottom: 6px; white-space: normal; }
+.tool-label { font-size: 12px; padding: 2px 8px; border-radius: 10px; background: #e2e2e2; color: #444; }
+
+/* Lekcja 3: zdjęcia (Vision) i identyfikator modelu */
+.thumb { display: block; max-width: 220px; max-height: 220px; border-radius: 8px; margin-top: 6px; }
+.pending-image { display: flex; align-items: center; gap: 10px; font-size: 14px; color: #555; }
+.pending-image .thumb { max-width: 64px; max-height: 64px; margin: 0; }
+.pending-image button { border: 0; background: none; cursor: pointer; font-size: 16px; }
+.composer button.secondary { background: #f0f0f0; color: #222; border: 1px solid #ccc; }
+.model-id { display: block; margin-top: 6px; font-size: 12px; color: #888; }
+
+/* Lekcja 3 (B): wygenerowane obrazy */
+.generated { display: block; max-width: 100%; max-height: 360px; border-radius: 8px; }
+.image-request { opacity: 0.75; }
+.image-error { color: #8a1f1f; }
+.composer button { white-space: nowrap; }
+.composer input[type="text"] { min-width: 0; }
+
+/* Lekcja 3 (B): podpowiedzi opisów i przycisk „Pobierz” */
+.suggestions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: -6px; font-size: 13px; color: #777; }
+.suggestions button { padding: 4px 10px; border: 1px solid #ddd; border-radius: 14px; background: #fff; color: #333; font-size: 13px; cursor: pointer; text-align: left; }
+.suggestions button:hover:not(:disabled) { border-color: #b8860b; }
+.suggestions button:disabled { opacity: 0.5; cursor: not-allowed; }
+.image-footer { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 6px; white-space: normal; }
+.image-footer .model-id { margin-top: 0; }
+.download { padding: 4px 12px; border: 1px solid #ccc; border-radius: 6px; background: #fff; color: #222; font-size: 13px; text-decoration: none; }

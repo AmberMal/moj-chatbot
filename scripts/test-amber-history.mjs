@@ -224,5 +224,141 @@ check("Identyfikator sesji z ciasteczka (bez podpisu)",
     final.ok ? `${final.turns.length} wiadomości w historii` : final.reason);
 }
 
+// ---------------------------------------------------------------------------
+console.log("\n=== CZĘŚĆ 5 (lekcja 3): źródła w historii i w podpisie ===");
+// ---------------------------------------------------------------------------
+{
+  const SRC = [{ url: "https://www.example.org/norma", title: "Norma BS EN 50131" },
+               { url: "https://producent.example.com/panel", title: "Panel – dane techniczne" }];
+  const FETCHED = "10.11.2026, 18:45";
+  function withSources(sources = SRC, fetchedAt = FETCHED) {
+    const turns = [{ role: "user", text: "Jaka norma dotyczy alarmów?" },
+                   { role: "assistant", text: "Alarmy opisuje norma BS EN 50131." }];
+    const sig = signAssistantTurn(KEY, SESSION_A, turns, META, sources, fetchedAt);
+    return [
+      { id: "u1", role: "user", parts: [{ type: "text", text: turns[0].text }] },
+      { id: "a1", role: "assistant",
+        parts: [{ type: "text", text: turns[1].text, state: "done" },
+                ...sources.map((x, i) => ({ type: "source-url", sourceId: `source-${i}`, url: x.url, title: x.title }))],
+        metadata: { ...META, sig, fetchedAt } },
+      { id: "u2", role: "user", parts: [{ type: "text", text: "Dziękuję" }] },
+    ];
+  }
+  accept("Odpowiedź ze źródłami i datą pobrania", withSources());
+  { const m = clone(withSources()); m[1].parts[1].url = "https://falszywa.example.com"; reject("Zmieniony adres źródła", m); }
+  { const m = clone(withSources()); m[1].parts[2].title = "Inny tytuł"; reject("Zmieniony tytuł źródła", m); }
+  { const m = clone(withSources()); m[1].parts.push({ type: "source-url", sourceId: "x", url: "https://dopisane.example.com", title: "Dopisane" });
+    reject("Dopisane źródło", m); }
+  { const m = clone(withSources()); m[1].parts.splice(1, 1); reject("Usunięte źródło", m); }
+  { const m = clone(withSources()); [m[1].parts[1], m[1].parts[2]] = [m[1].parts[2], m[1].parts[1]]; reject("Zmieniona kolejność źródeł", m); }
+  { const m = clone(withSources()); m[1].metadata.fetchedAt = "01.01.2020, 00:00"; reject("Zmieniona data pobrania", m); }
+  { const m = clone(withSources()); delete m[1].metadata.fetchedAt; reject("Usunięta data pobrania", m); }
+  { const m = clone(withSources()); m[1].parts[1].url = "javascript:alert(1)"; reject("Źródło z adresem javascript:", m); }
+  { const m = clone(withSources()); m[1].parts.unshift({ type: "file", mediaType: "image/png", url: "https://x.example.com/a.png" });
+    reject("Plik w odpowiedzi Amber", m); }
+  { const m = clone(withSources()); m[1].parts = m[1].parts.filter((x) => x.type !== "text"); reject("Odpowiedź Amber bez tekstu, same źródła", m); }
+  { const m = clone(withSources()); m[0].parts.push({ type: "source-url", sourceId: "u", url: "https://x.example.com", title: "x" });
+    reject("Źródło w wiadomości klienta", m); }
+  { const many = Array.from({ length: 7 }, (_, i) => ({ url: `https://s${i}.example.com`, title: `S${i}` }));
+    reject("Za dużo źródeł (7)", withSources(many)); }
+  { const m = clone(withSources()); m[1].metadata.extra = 1; reject("Dodatkowe pole w metadanych przy źródłach", m); }
+
+  // Pełny przepływ ze źródłami: serwer → strumień → przeglądarka → serwer.
+  const draft = "Alarmy opisuje norma BS EN 50131.";
+  const userMsg = { id: "u1", role: "user", parts: [{ type: "text", text: "Jaka norma dotyczy alarmów?" }] };
+  const r1 = checkChatHistory([userMsg], ctxA);
+  const sig = signAssistantTurn(KEY, SESSION_A, [...r1.turns, { role: "assistant", text: draft }], META, SRC, FETCHED);
+  const stream = createUIMessageStream({ execute: ({ writer }) => {
+    writer.write({ type: "start", messageMetadata: { ...META, sig, fetchedAt: FETCHED } });
+    writer.write({ type: "text-start", id: "draft" });
+    writer.write({ type: "text-delta", id: "draft", delta: draft });
+    writer.write({ type: "text-end", id: "draft" });
+    SRC.forEach((x, i) => writer.write({ type: "source-url", sourceId: `source-${i}`, url: x.url, title: x.title }));
+    writer.write({ type: "finish", finishReason: "stop" });
+  } });
+  let last;
+  for await (const msg of readUIMessageStream({ stream })) last = msg;
+  const sent = JSON.parse(JSON.stringify([userMsg, last, { id: "u2", role: "user", parts: [{ type: "text", text: "Dziękuję" }] }]));
+  const final = checkChatHistory(sent, ctxA);
+  check("Pełny przepływ ze źródłami (strumień → useChat → serwer)", final.ok === true && last.parts.filter((x) => x.type === "source-url").length === 2,
+    final.ok ? "źródła zachowane, podpis poprawny" : final.reason);
+}
+
+// ---------------------------------------------------------------------------
+console.log("\n=== CZĘŚĆ 6 (lekcja 3): lista narzędzi w podpisie ===");
+// ---------------------------------------------------------------------------
+{
+  function withTools(tools) {
+    const turns = [{ role: "user", text: "Jaki dziś dzień?" }, { role: "assistant", text: "Dziś jest wtorek." }];
+    const sig = signAssistantTurn(KEY, SESSION_A, turns, META, [], "", tools);
+    return [
+      { id: "u1", role: "user", parts: [{ type: "text", text: turns[0].text }] },
+      { id: "a1", role: "assistant", parts: [{ type: "text", text: turns[1].text }], metadata: { ...META, sig, tools } },
+      { id: "u2", role: "user", parts: [{ type: "text", text: "Dziękuję" }] },
+    ];
+  }
+  accept("Odpowiedź z listą narzędzi [aktualnyCzas]", withTools(["aktualnyCzas"]));
+  { const m = clone(withTools(["aktualnyCzas"])); m[1].metadata.tools = ["wyszukiwanie"]; reject("Podmieniona etykieta narzędzia", m); }
+  { const m = clone(withTools(["aktualnyCzas"])); m[1].metadata.tools.push("wyszukiwanie"); reject("Dopisana etykieta narzędzia", m); }
+  { const m = clone(withTools(["aktualnyCzas"])); delete m[1].metadata.tools; reject("Usunięta lista narzędzi", m); }
+  { const m = clone(withTools(["aktualnyCzas"])); m[1].metadata.tools = ["send_email"]; reject("Nieznane narzędzie send_email", m); }
+  { const m = clone(withTools(["aktualnyCzas"])); m[1].metadata.tools = ["aktualnyCzas", "aktualnyCzas"]; reject("Powtórzone narzędzie", m); }
+  { const m = clone(withTools(["aktualnyCzas"])); m[1].metadata.tools = "aktualnyCzas"; reject("Lista narzędzi jako tekst", m); }
+  accept("Odpowiedź z etykietami [sprawdzObszar, informacjeOUrzadzeniu]", withTools(["sprawdzObszar", "informacjeOUrzadzeniu"]));
+  accept("Odpowiedź ze wszystkimi 4 narzędziami", withTools(["wyszukiwanie", "aktualnyCzas", "sprawdzObszar", "informacjeOUrzadzeniu"]));
+}
+
+// ---------------------------------------------------------------------------
+console.log("\n=== CZĘŚĆ 7 (lekcja 3): zdjęcia klienta i identyfikator modelu ===");
+// ---------------------------------------------------------------------------
+{
+  const B64 = Buffer.from("fikcyjne-zdjecie-do-testu").toString("base64");
+  const JPG = `data:image/jpeg;base64,${B64}`;
+  const userWithImage = (url = JPG, mediaType = "image/jpeg", text = "Co oznacza ten komunikat?") => ({
+    id: "u1", role: "user",
+    parts: [{ type: "text", text }, { type: "file", mediaType, url, filename: "panel.jpg" }],
+  });
+
+  const r1 = accept("Wiadomość klienta ze zdjęciem JPG", [userWithImage()]);
+  check("Zdjęcie trafia do modelu jako base64 z typem", r1.ok && r1.turns[0].image?.base64 === B64 && r1.turns[0].image?.mediaType === "image/jpeg");
+  accept("Zdjęcie PNG", [userWithImage(`data:image/png;base64,${B64}`, "image/png")]);
+  accept("Zdjęcie WEBP", [userWithImage(`data:image/webp;base64,${B64}`, "image/webp")]);
+  accept("Samo zdjęcie bez tekstu", [userWithImage(JPG, "image/jpeg", "")]);
+  reject("Plik GIF", [userWithImage(`data:image/gif;base64,${B64}`, "image/gif")]);
+  reject("Plik PDF", [userWithImage(`data:application/pdf;base64,${B64}`, "application/pdf")]);
+  reject("Zdjęcie jako adres https (nie data:)", [userWithImage("https://example.com/a.jpg")]);
+  reject("Typ niezgodny z danymi (png podany jako jpeg)", [userWithImage(`data:image/png;base64,${B64}`, "image/jpeg")]);
+  reject("Uszkodzone base64", [userWithImage("data:image/jpeg;base64,@@@nie-base64###")]);
+  reject("Puste dane zdjęcia", [userWithImage("data:image/jpeg;base64,")]);
+  reject("Zdjęcie za duże (ponad limit)", [userWithImage(`data:image/jpeg;base64,${"A".repeat(3_000_004)}`)]);
+  { const m = userWithImage(); m.parts.push({ ...m.parts[1] }); reject("Dwa zdjęcia w jednej wiadomości", [m]); }
+
+  // Odpowiedź Amber o zdjęciu – z identyfikatorem modelu w podpisie.
+  const MODEL = "google/gemini-3.8-flash";
+  const answer = "Widzę panel alarmu z komunikatem o usterce. Przyczynę potwierdzi nasz zespół.";
+  const turns = [{ role: "user", text: "Co oznacza ten komunikat?" }, { role: "assistant", text: answer }];
+  const sig = signAssistantTurn(KEY, SESSION_A, turns, META, [], "", [], MODEL);
+  const withModel = (firstUser) => [
+    firstUser,
+    { id: "a1", role: "assistant", parts: [{ type: "text", text: answer }], metadata: { ...META, sig, model: MODEL } },
+    { id: "u2", role: "user", parts: [{ type: "text", text: "Dziękuję" }] },
+  ];
+  const stripped = { id: "u1", role: "user", parts: [{ type: "text", text: "Co oznacza ten komunikat?" }] };
+  accept("Rozmowa po zdjęciu (stare zdjęcie usunięte przez przeglądarkę) + model w podpisie", withModel(stripped));
+  reject("Stare zdjęcie wysłane ponownie w historii", withModel(userWithImage()));
+  { const m = clone(withModel(stripped)); m[1].metadata.model = "openai/inny-model"; reject("Podmieniony identyfikator modelu", m); }
+  { const m = clone(withModel(stripped)); delete m[1].metadata.model; reject("Usunięty identyfikator modelu", m); }
+  { const m = clone(withModel(stripped)); m[1].metadata.model = "x".repeat(121); reject("Za długi identyfikator modelu", m); }
+
+  // Zdjęcie bez tekstu: po usunięciu zdjęcia zostaje pusty tekst – podpis nadal się zgadza.
+  const turnsEmpty = [{ role: "user", text: "" }, { role: "assistant", text: answer }];
+  const sigEmpty = signAssistantTurn(KEY, SESSION_A, turnsEmpty, META, [], "", [], MODEL);
+  accept("Samo zdjęcie → odpowiedź → kolejne pytanie", [
+    { id: "u1", role: "user", parts: [{ type: "text", text: "" }] },
+    { id: "a1", role: "assistant", parts: [{ type: "text", text: answer }], metadata: { ...META, sig: sigEmpty, model: MODEL } },
+    { id: "u2", role: "user", parts: [{ type: "text", text: "Ile kosztuje naprawa?" }] },
+  ]);
+}
+
 console.log(`\nWynik: ${passed} zaliczonych, ${failed} niezaliczonych.`);
 process.exit(failed === 0 ? 0 : 1);
