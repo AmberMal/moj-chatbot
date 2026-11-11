@@ -8,6 +8,11 @@
 //    ZANIM cokolwiek trafi do modelu.
 // 3. Klucz do podpisów jest osobny – wyprowadzony z SESSION_SECRET metodą HKDF
 //    z etykietą "amber-history-v1" (inny niż klucz ciasteczka sesji).
+// 4. Warsztat 3: dwa rodzaje podpisanych odpowiedzi Amber:
+//    – odpowiedź JSON (dotychczasowy /api/chat): metadane category/priority/needs_review, podpis v4;
+//    – odpowiedź czatu z /api/agent (mode=chat): metadane `kind: "chat"`, podpis v5.
+//    Rodzaj i wersja są częścią podpisanych danych – podpisu jednego rodzaju nie da się
+//    wykorzystać dla drugiego (dopisanie lub usunięcie pól zmienia podpisywane dane).
 
 import { createHmac, hkdfSync, timingSafeEqual } from "node:crypto";
 
@@ -30,7 +35,27 @@ const OPTIONAL_META_KEYS = ["fetchedAt", "tools", "model"] as const;
 export const ALLOWED_IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp"] as const;
 // Limit długości zakodowanego zdjęcia (~2,2 MB po zdekodowaniu) – mieści się w limicie Vercel 4,5 MB.
 export const MAX_IMAGE_DATA_URL_CHARS = 3_000_000;
-export const HISTORY_TOOL_NAMES = ["wyszukiwanie", "aktualnyCzas", "sprawdzObszar", "informacjeOUrzadzeniu"] as const;
+export const HISTORY_TOOL_NAMES = [
+  "wyszukiwanie",
+  "aktualnyCzas",
+  "sprawdzObszar",
+  "informacjeOUrzadzeniu",
+  "generujObraz",
+] as const;
+
+// Warsztat 3: odpowiedź czatu z /api/agent (mode=chat).
+export const AGENT_CHAT_KIND = "chat";
+const AGENT_META_KEYS = ["kind", "sig"] as const;
+// Części narzędzi w odpowiedzi czatu (np. „tool-generujObraz”) – pokazywane w przeglądarce,
+// ale NIGDY nie przekazywane modelowi (model dostaje tylko sprawdzony tekst).
+export const AGENT_TOOL_PART_TYPES = [
+  "tool-web_search",
+  "tool-aktualnyCzas",
+  "tool-sprawdzObszar",
+  "tool-informacjeOUrzadzeniu",
+  "tool-generujObraz",
+] as const;
+export const MAX_AGENT_TOOL_PARTS = 10;
 export const MAX_HISTORY_SOURCES = 6;
 
 // Źródło z wyszukiwania (część „source-url” odpowiedzi Amber).
@@ -117,6 +142,31 @@ export function signAssistantTurn(
     .digest("base64url");
 }
 
+// Warsztat 3: podpis odpowiedzi czatu z /api/agent (mode=chat). Osobna wersja (v5) i rodzaj ("chat").
+export type AgentTurnInfo = { sources?: TurnSource[]; fetchedAt?: string; tools?: string[]; model?: string };
+
+function agentSignaturePayload(sessionId: string, history: ChatTurn[], info: AgentTurnInfo): string {
+  return JSON.stringify({
+    v: 5,
+    kind: AGENT_CHAT_KIND,
+    sid: sessionId,
+    history: history.map((turn) => [turn.role, turn.text]),
+    sources: (info.sources ?? []).map((source) => [source.url, source.title]),
+    tools: info.tools ?? [],
+    model: info.model ?? "",
+    fetchedAt: info.fetchedAt ?? "",
+  });
+}
+
+export function signAgentChatTurn(
+  key: Buffer,
+  sessionId: string,
+  history: ChatTurn[],
+  info: AgentTurnInfo = {},
+): string {
+  return createHmac("sha256", key).update(agentSignaturePayload(sessionId, history, info)).digest("base64url");
+}
+
 function signatureMatches(expected: string, given: string): boolean {
   const a = Buffer.from(expected);
   const b = Buffer.from(given);
@@ -182,10 +232,16 @@ function isHttpUrl(value: unknown): value is string {
 }
 
 // Odpowiedź Amber: części tekstowe + opcjonalne części „source-url” (adres http/https).
-function readAssistantParts(parts: unknown): { text: string; sources: TurnSource[] } | null {
+// Warsztat 3 (tylko odpowiedź czatu z /api/agent): także „step-start” i części znanych narzędzi.
+// Części narzędzi są tylko sprawdzane (typ, identyfikator) i pomijane – nie trafiają do modelu ani do podpisu.
+function readAssistantParts(
+  parts: unknown,
+  agentChat = false,
+): { text: string; sources: TurnSource[] } | null {
   if (!Array.isArray(parts) || parts.length === 0) return null;
   let text = "";
   let hasText = false;
+  let toolParts = 0;
   const sources: TurnSource[] = [];
   for (const part of parts) {
     if (!isPlainObject(part)) return null;
@@ -196,12 +252,55 @@ function readAssistantParts(parts: unknown): { text: string; sources: TurnSource
       const title = part.title === undefined ? "" : part.title;
       if (typeof title !== "string") return null;
       sources.push({ url: part.url, title });
+    } else if (agentChat && part.type === "step-start") {
+      continue;
+    } else if (
+      agentChat &&
+      typeof part.type === "string" &&
+      (AGENT_TOOL_PART_TYPES as readonly string[]).includes(part.type) &&
+      typeof part.toolCallId === "string" &&
+      part.toolCallId.length > 0 &&
+      part.toolCallId.length <= 200
+    ) {
+      toolParts++;
     } else {
       return null;
     }
   }
-  if (!hasText || sources.length > MAX_HISTORY_SOURCES) return null;
+  if (sources.length > MAX_HISTORY_SOURCES || toolParts > MAX_AGENT_TOOL_PARTS) return null;
+  // Odpowiedź JSON zawsze ma tekst; odpowiedź czatu może składać się z samego narzędzia (np. obrazu).
+  if (!hasText && !(agentChat && toolParts > 0)) return null;
   return { text, sources };
+}
+
+// Wspólna kontrola opcjonalnych metadanych (źródła, narzędzia, model).
+function readOptionalMeta(metadata: Record<string, unknown>) {
+  const { fetchedAt = "", tools = [], model = "" } = metadata;
+  if (typeof fetchedAt !== "string" || fetchedAt.length > 40) return null;
+  if (typeof model !== "string" || model.length > 120) return null;
+  if (
+    !Array.isArray(tools) ||
+    tools.length > HISTORY_TOOL_NAMES.length ||
+    new Set(tools).size !== tools.length ||
+    !tools.every((name) => (HISTORY_TOOL_NAMES as readonly unknown[]).includes(name))
+  ) {
+    return null;
+  }
+  return { fetchedAt, tools: tools as string[], model };
+}
+
+// Metadane odpowiedzi czatu z /api/agent: dokładnie kind = "chat" + sig (+ opcjonalne pola).
+function readAgentMeta(
+  metadata: unknown,
+): { sig: string; fetchedAt: string; tools: string[]; model: string } | null {
+  if (!isPlainObject(metadata) || metadata.kind !== AGENT_CHAT_KIND) return null;
+  const keys = Object.keys(metadata);
+  const allowed = [...AGENT_META_KEYS, ...OPTIONAL_META_KEYS] as readonly string[];
+  if (!keys.every((key) => allowed.includes(key))) return null;
+  const { sig } = metadata;
+  if (typeof sig !== "string" || sig.length === 0) return null;
+  const optional = readOptionalMeta(metadata);
+  return optional ? { sig, ...optional } : null;
 }
 
 function readAssistantMeta(
@@ -269,7 +368,26 @@ export function checkChatHistory(
       continue;
     }
 
-    // Odpowiedź Amber: tekst (+ ewentualne źródła) i poprawny podpis obejmujący całą rozmowę.
+    // Warsztat 3: odpowiedź czatu z /api/agent (kind = "chat", podpis v5).
+    if (isPlainObject(message.metadata) && "kind" in message.metadata) {
+      const agentMeta = readAgentMeta(message.metadata);
+      if (!agentMeta) return fail(`message-${i}-bad-metadata`, HISTORY_MESSAGES.tampered);
+      const agentParts = readAssistantParts(message.parts, true);
+      if (agentParts === null) return fail(`message-${i}-parts-not-text`, HISTORY_MESSAGES.format);
+      turns.push({ role, text: agentParts.text });
+      const expectedAgent = signAgentChatTurn(key, sessionId, turns, {
+        sources: agentParts.sources,
+        fetchedAt: agentMeta.fetchedAt,
+        tools: agentMeta.tools,
+        model: agentMeta.model,
+      });
+      if (!signatureMatches(expectedAgent, agentMeta.sig)) {
+        return fail(`message-${i}-bad-signature`, HISTORY_MESSAGES.tampered);
+      }
+      continue;
+    }
+
+    // Odpowiedź Amber (JSON): tekst (+ ewentualne źródła) i poprawny podpis obejmujący całą rozmowę.
     const assistant = readAssistantParts(message.parts);
     if (assistant === null) return fail(`message-${i}-parts-not-text`, HISTORY_MESSAGES.format);
 

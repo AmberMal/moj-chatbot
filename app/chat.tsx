@@ -4,6 +4,21 @@ import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport, type UIMessage } from "ai";
 import { useRouter } from "next/navigation";
 import { Fragment, useRef, useState, type ChangeEvent, type FormEvent } from "react";
+import {
+  AGENT_API,
+  MAX_IMAGE_DESCRIPTION_CHARS,
+  NO_IMAGE_MESSAGE,
+  STEP_LIMIT_MESSAGE,
+  buildImageRequest,
+  hasImageToolPart,
+  hasVisibleContent,
+  imageDownloadName,
+  isStepLimit,
+  prepareAgentMessages,
+  readAnalysisResponse,
+  readGeneratedImagePart,
+  type AnalysisResult,
+} from "@/lib/amber-chat-client";
 
 // Limit długości wiadomości klienta – taki sam jak na serwerze (lib/amber-history.ts).
 const MAX_MESSAGE_CHARS = 4000;
@@ -16,6 +31,7 @@ const TOOL_LABELS: Record<string, string> = {
   aktualnyCzas: "🕒 aktualnyCzas",
   sprawdzObszar: "📍 sprawdzObszar",
   informacjeOUrzadzeniu: "🔧 informacjeOUrzadzeniu",
+  generujObraz: "🎨 generujObraz",
 };
 
 // Lekcja 3 (Vision): zdjęcia jpg/png/webp do 4 MB. Przed wysłaniem przeglądarka
@@ -27,9 +43,8 @@ const MAX_IMAGE_DATA_URL_CHARS = 3_000_000; // taki sam limit jak na serwerze (l
 
 type PendingImage = { url: string; name: string };
 
-// Lekcja 3 (B): wygenerowane obrazy są widoczne tylko w tym oknie –
-// nie trafiają do historii rozmowy z Amber (nie psują podpisów i nie zwiększają kosztów).
-const MAX_IMAGE_PROMPT_CHARS = 500; // taki sam limit jak na serwerze (lib/amber-image.ts)
+// Etap 4: „Wygeneruj obraz” wysyła prośbę do /api/agent (mode=chat) – obraz generuje narzędzie wybrane przez model.
+const MAX_IMAGE_PROMPT_CHARS = MAX_IMAGE_DESCRIPTION_CHARS; // 500, tak samo jak w narzędziu generujObraz
 // Klikalne podpowiedzi opisów obrazu (wpisują tekst do pola – nie wysyłają, bo generowanie jest płatne).
 const IMAGE_PROMPT_SUGGESTIONS = [
   "Plakat: dom chroniony systemem alarmowym, nowoczesny styl, kolory bursztynowy i grafitowy",
@@ -37,21 +52,14 @@ const IMAGE_PROMPT_SUGGESTIONS = [
   "Grafika do social media: kamera CCTV na elewacji londyńskiej kamienicy o zmierzchu",
 ];
 
-// Nazwa pobieranego pliku, np. amber-obraz-2026-11-10-1945.png
-function downloadName(item: GeneratedImage): string {
-  const d = item.createdAt;
-  const pad = (n: number) => String(n).padStart(2, "0");
-  const ext = item.url?.startsWith("data:image/jpeg") ? "jpg" : item.url?.startsWith("data:image/webp") ? "webp" : "png";
-  return `amber-obraz-${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}.${ext}`;
-}
-
-type GeneratedImage = {
+// Warsztat 3: „Analiza JSON” (mode=analyze) – wynik widoczny tylko w tym oknie, nie trafia do historii rozmowy.
+type JsonAnalysis = {
   id: string;
-  afterCount: number; // liczba wiadomości czatu w chwili wysłania – miejsce w rozmowie
-  prompt: string;
+  afterCount: number;
+  text: string;
   status: "loading" | "done" | "error";
   createdAt: Date;
-  url?: string;
+  result?: AnalysisResult;
   model?: string;
   error?: string;
 };
@@ -71,21 +79,13 @@ async function compressImage(file: File): Promise<string> {
   return canvas.toDataURL("image/jpeg", 0.85);
 }
 
-// Pełne zdjęcie wysyłamy tylko w najnowszych wiadomościach (po ostatniej odpowiedzi Amber).
-// W starszych zostaje sam tekst – miniatura nadal jest widoczna w oknie czatu.
-function withoutOldImages(messages: UIMessage[]): UIMessage[] {
-  const lastAssistant = messages.map((message) => message.role).lastIndexOf("assistant");
-  return messages.map((message, index) => {
-    if (index > lastAssistant || message.role !== "user") return message;
-    const parts = message.parts.filter((part) => part.type !== "file");
-    return { ...message, parts: parts.length > 0 ? parts : [{ type: "text" as const, text: "" }] };
-  });
-}
-
+// Warsztat 3: czat korzysta z /api/agent (mode=chat).
+// Przed wysłaniem historii (lib/amber-chat-client.ts): bez niepodpisanych odpowiedzi Amber,
+// pełne zdjęcie tylko w najnowszych wiadomościach, bez plików wygenerowanych obrazów.
 const transport = new DefaultChatTransport<UIMessage>({
-  api: "/api/chat",
+  api: AGENT_API,
   prepareSendMessagesRequest: ({ id, messages, body, trigger, messageId }) => ({
-    body: { ...body, id, messages: withoutOldImages(messages), trigger, messageId },
+    body: { ...body, mode: "chat", id, messages: prepareAgentMessages(messages), trigger, messageId },
   }),
 });
 
@@ -95,76 +95,114 @@ export default function Chat() {
   const [pendingImage, setPendingImage] = useState<PendingImage | null>(null);
   const [imageError, setImageError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [generated, setGenerated] = useState<GeneratedImage[]>([]);
-  const isGenerating = generated.some((item) => item.status === "loading");
-  // useChat wysyła historię rozmowy do /api/chat i odbiera odpowiedź strumieniowo.
-  const { messages, sendMessage, status, error, clearError, stop } = useChat({ transport });
+  // Etap 4: trwa prośba o obraz wysłana przyciskiem „Wygeneruj obraz”.
+  const [imageRequestPending, setImageRequestPending] = useState(false);
+  const imageRequestRef = useRef(false);
+  // Odpowiedzi na prośbę o obraz, w których model nie wywołał narzędzia generujObraz.
+  const [noImageIds, setNoImageIds] = useState<string[]>([]);
+  const [analyses, setAnalyses] = useState<JsonAnalysis[]>([]);
+  const isAnalyzing = analyses.some((item) => item.status === "loading");
+  // Odpowiedzi zatrzymane limitem 5 kroków (komunikat pod odpowiedzią).
+  const [stepLimitIds, setStepLimitIds] = useState<string[]>([]);
+  // useChat wysyła historię rozmowy do /api/agent (mode=chat) i odbiera odpowiedź strumieniowo.
+  const { messages, sendMessage, status, error, clearError, stop } = useChat({
+    transport,
+    onFinish: ({ message, finishReason, isError }) => {
+      if (isStepLimit(finishReason)) setStepLimitIds((ids) => [...ids, message.id]);
+      if (imageRequestRef.current && !isError && !hasImageToolPart(message)) {
+        setNoImageIds((ids) => [...ids, message.id]);
+      }
+      imageRequestRef.current = false;
+      setImageRequestPending(false);
+    },
+    onError: () => {
+      imageRequestRef.current = false;
+      setImageRequestPending(false);
+    },
+  });
 
   const isBusy = status === "submitted" || status === "streaming";
-  // Gdy Amber pisze albo trwa generowanie obrazu – wszystkie przyciski są zablokowane.
-  const isLocked = isBusy || isGenerating;
+  const isGenerating = imageRequestPending && isBusy;
+  // „Model pisze…” – od wysłania aż do pojawienia się pierwszej treści odpowiedzi (bez pustego dymka).
+  const lastMessage = messages[messages.length - 1];
+  const waitingForContent =
+    status === "submitted" ||
+    (status === "streaming" && lastMessage?.role === "assistant" && !hasVisibleContent(lastMessage));
+  // Gdy Amber pisze, trwa generowanie obrazu albo analiza – wszystkie przyciski są zablokowane.
+  const isLocked = isBusy || isGenerating || isAnalyzing;
   const canSend = (input.trim().length > 0 || pendingImage !== null) && !isLocked;
-  const canGenerate =
-    input.trim().length > 0 && input.trim().length <= MAX_IMAGE_PROMPT_CHARS && !isBusy && !isGenerating;
+  const canGenerate = input.trim().length > 0 && input.trim().length <= MAX_IMAGE_PROMPT_CHARS && !isLocked;
+  const canAnalyze = input.trim().length > 0 && input.trim().length <= MAX_MESSAGE_CHARS && !isLocked;
 
-  async function handleGenerateImage() {
-    const prompt = input.trim();
-    if (!canGenerate) return;
-    const id = `img-${Date.now()}`;
-    const update = (patch: Partial<GeneratedImage>) =>
-      setGenerated((items) => items.map((item) => (item.id === id ? { ...item, ...patch } : item)));
-    setGenerated((items) => [...items, { id, afterCount: messages.length, prompt, status: "loading", createdAt: new Date() }]);
+  // Warsztat 3: „Analiza JSON” – wysyła wyłącznie wpisany tekst do /api/agent (mode=analyze), bez historii.
+  async function handleAnalyze() {
+    const text = input.trim();
+    if (!canAnalyze) return;
+    const id = `analysis-${Date.now()}`;
+    const update = (patch: Partial<JsonAnalysis>) =>
+      setAnalyses((items) => items.map((item) => (item.id === id ? { ...item, ...patch } : item)));
+    setAnalyses((items) => [...items, { id, afterCount: messages.length, text, status: "loading", createdAt: new Date() }]);
     setInput("");
     try {
-      const response = await fetch("/api/image", {
+      const response = await fetch(AGENT_API, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt }),
+        body: JSON.stringify({ mode: "analyze", text }),
       });
-      const data = (await response.json().catch(() => ({}))) as { image?: unknown; model?: unknown; error?: unknown };
-      if (response.ok && typeof data.image === "string" && /^data:image\/(png|jpeg|webp);base64,/.test(data.image)) {
-        update({ status: "done", url: data.image, model: typeof data.model === "string" ? data.model : undefined });
-      } else if (response.status === 401) {
+      if (response.status === 401) {
         update({ status: "error", error: "Sesja wygasła. Zaloguj się ponownie." });
-      } else {
-        update({
-          status: "error",
-          error: typeof data.error === "string" ? data.error : "Model obrazów jest teraz niedostępny. Spróbuj ponownie za chwilę.",
-        });
+        return;
       }
+      if (!response.ok) {
+        const message = (await response.text().catch(() => "")).slice(0, 300);
+        update({ status: "error", error: message || "Analiza nie powiodła się. Spróbuj ponownie." });
+        return;
+      }
+      const data = readAnalysisResponse(await response.json().catch(() => null));
+      if (!data) {
+        update({ status: "error", error: "Serwer zwrócił nieprawidłowy wynik analizy. Spróbuj ponownie." });
+        return;
+      }
+      update({ status: "done", result: data.analysis, model: data.model });
     } catch {
       update({ status: "error", error: "Brak połączenia z serwerem. Spróbuj ponownie." });
     }
   }
 
-  // Wygenerowane obrazy w miejscu rozmowy, w którym o nie poproszono.
-  function generatedAfter(count: number) {
-    return generated
+  // Wyniki „Analiza JSON” w miejscu rozmowy, w którym o nie poproszono.
+  function analysesAfter(count: number) {
+    return analyses
       .filter((item) => item.afterCount === count)
       .map((item) => (
         <Fragment key={item.id}>
           <div className="message user">
-            <span className="image-request">🎨 Wygeneruj obraz: </span>
-            <span>{item.prompt}</span>
+            <span className="image-request">🧾 Analiza JSON: </span>
+            <span>{item.text}</span>
           </div>
           <div className={`message assistant${item.status === "loading" ? " pending" : ""}`}>
-            {item.status === "loading" && "Generuję obraz…"}
+            {item.status === "loading" && "Analizuję…"}
             {item.status === "error" && <span className="image-error">{item.error}</span>}
-            {item.status === "done" && item.url && (
+            {item.status === "done" && item.result && (
               <>
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img className="generated" src={item.url} alt={`Wygenerowany obraz: ${item.prompt}`} />
-                <div className="image-footer">
-                  {item.model && <small className="model-id">model: {item.model}</small>}
-                  <a className="download" href={item.url} download={downloadName(item)}>
-                    Pobierz
-                  </a>
-                </div>
+                <pre className="analysis-json">{JSON.stringify(item.result, null, 2)}</pre>
+                {item.model && <small className="model-id">model: {item.model}</small>}
               </>
             )}
           </div>
         </Fragment>
       ));
+  }
+
+  // Etap 4: „Wygeneruj obraz” = wiadomość z wyraźną prośbą do /api/agent (mode=chat).
+  // Model wybiera narzędzie generujObraz; obraz, model i „Pobierz” pokazuje odpowiedź Amber.
+  function handleGenerateImage() {
+    const request = buildImageRequest(input);
+    if (!request || !canGenerate) return; // opis 1–500 znaków – inaczej nic nie jest wysyłane
+    if (error) clearError();
+    imageRequestRef.current = true;
+    setImageRequestPending(true);
+    sendMessage({ text: request });
+    setInput("");
   }
 
   async function handleImageChange(event: ChangeEvent<HTMLInputElement>) {
@@ -225,11 +263,11 @@ export default function Chat() {
       </div>
 
       <div className="messages" aria-label="Rozmowa" aria-live="polite">
-        {messages.length === 0 && generated.length === 0 && (
+        {messages.length === 0 && analyses.length === 0 && (
           <p className="hint">Napisz pierwszą wiadomość, aby zacząć rozmowę.</p>
         )}
 
-        {generatedAfter(0)}
+        {analysesAfter(0)}
 
         {messages.map((message, index) => {
           // Lekcja 3: źródła z wyszukiwania (tylko adresy http/https).
@@ -243,6 +281,10 @@ export default function Chat() {
           const toolLabels = Array.isArray(meta?.tools)
             ? meta.tools.filter((name) => name in TOOL_LABELS).map((name) => TOOL_LABELS[name])
             : [];
+          // Odpowiedź Amber bez treści (model dopiero zaczyna albo używa narzędzia) – bez pustego dymka.
+          if (message.role === "assistant" && !hasVisibleContent(message)) {
+            return <Fragment key={message.id}>{analysesAfter(index + 1)}</Fragment>;
+          }
           return (
             <Fragment key={message.id}>
             <div className={`message ${message.role}`}>
@@ -266,6 +308,28 @@ export default function Chat() {
                   // eslint-disable-next-line @next/next/no-img-element
                   return <img key={i} className="thumb" src={part.url} alt={part.filename || "Wysłane zdjęcie"} />;
                 }
+                // Warsztat 3: obraz wygenerowany przez narzędzie modelu (generujObraz).
+                const image = message.role === "assistant" ? readGeneratedImagePart(part) : null;
+                if (image?.status === "loading") {
+                  return <span key={i} className="generating">Generuję obraz…</span>;
+                }
+                if (image?.status === "error") {
+                  return <span key={i} className="image-error">{image.error}</span>;
+                }
+                if (image?.status === "done") {
+                  return (
+                    <span key={i} className="generated-block">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img className="generated" src={image.url} alt="Wygenerowany obraz" />
+                      <span className="image-footer">
+                        {image.model && <small className="model-id">model: {image.model}</small>}
+                        <a className="download" href={image.url} download={imageDownloadName(image.url, new Date())}>
+                          Pobierz
+                        </a>
+                      </span>
+                    </span>
+                  );
+                }
                 return null;
               })}
               {message.role === "assistant" && sources.length > 0 && (
@@ -288,13 +352,19 @@ export default function Chat() {
               {message.role === "assistant" && meta?.model && (
                 <small className="model-id">model: {meta.model}</small>
               )}
+              {message.role === "assistant" && noImageIds.includes(message.id) && (
+                <small className="image-error step-limit">{NO_IMAGE_MESSAGE}</small>
+              )}
+              {message.role === "assistant" && stepLimitIds.includes(message.id) && (
+                <small className="step-limit">⚠️ {STEP_LIMIT_MESSAGE}</small>
+              )}
             </div>
-            {generatedAfter(index + 1)}
+            {analysesAfter(index + 1)}
             </Fragment>
           );
         })}
 
-        {status === "submitted" && (
+        {waitingForContent && (
           <div className="message assistant pending">Model pisze…</div>
         )}
       </div>
@@ -350,6 +420,9 @@ export default function Chat() {
         </button>
         <button type="button" className="secondary" disabled={!canGenerate} onClick={handleGenerateImage}>
           {isGenerating ? "Generuję…" : "Wygeneruj obraz"}
+        </button>
+        <button type="button" className="secondary" disabled={!canAnalyze} onClick={handleAnalyze}>
+          {isAnalyzing ? "Analizuję…" : "Analiza JSON"}
         </button>
       </form>
 

@@ -6,6 +6,8 @@ import {
   NoContentGeneratedError,
   NoImageGeneratedError,
   generateImage,
+  jsonSchema,
+  tool,
   type ImageModel,
 } from "ai";
 
@@ -90,3 +92,83 @@ export async function generateAmberImage({
     return { ok: false, status: 502, message: IMAGE_MESSAGES.unavailable, details };
   }
 }
+
+// ---------------------------------------------------------------------------
+// Warsztat 3: generowanie obrazu jako NARZĘDZIE wybierane przez model (mode=chat w /api/agent).
+// ---------------------------------------------------------------------------
+
+// Wynik narzędzia trafia do PRZEGLĄDARKI (obraz + model).
+export type ImageToolOutput = { ok: true; image: string; model: string } | { ok: false; error: string };
+
+// Do MODELU wraca tylko krótki tekst (toModelOutput) – nigdy plik obrazu.
+export const IMAGE_TOOL_MODEL_TEXT = {
+  done: "Obraz wygenerowany i pokazany klientowi w aplikacji.",
+  failed: "Nie udało się wygenerować obrazu.",
+} as const;
+
+export const IMAGE_TOOL_NAME = "generujObraz";
+
+export function imageToolModelText(output: unknown): string {
+  if (typeof output === "object" && output !== null && (output as { ok?: unknown }).ok === true) {
+    return IMAGE_TOOL_MODEL_TEXT.done;
+  }
+  const error = (output as { error?: unknown } | null)?.error;
+  // Komunikat błędu jest nasz (IMAGE_MESSAGES) – krótki, po polsku, bez szczegółów technicznych.
+  return typeof error === "string" && error.length <= 200
+    ? `${IMAGE_TOOL_MODEL_TEXT.failed} ${error}`
+    : IMAGE_TOOL_MODEL_TEXT.failed;
+}
+
+export function createImageTool({
+  model,
+  apiModelId,
+  maxRetries = 1,
+}: {
+  model: ImageModel;
+  apiModelId?: () => string | undefined;
+  maxRetries?: number;
+}) {
+  return tool({
+    description:
+      "Generuje obraz na podstawie opisu (najwyżej 500 znaków). Używaj WYŁĄCZNIE wtedy, gdy klient wyraźnie poprosi " +
+      "o wygenerowanie, stworzenie lub narysowanie obrazu albo grafiki. Nigdy nie używaj z własnej inicjatywy. " +
+      "Obraz pokazuje aplikacja – Ty dostajesz tylko informację, czy się udało.",
+    inputSchema: jsonSchema<{ opis: string }>(
+      {
+        type: "object",
+        properties: {
+          opis: {
+            type: "string",
+            minLength: 1,
+            maxLength: MAX_IMAGE_PROMPT_CHARS,
+            description: "Opis obrazu, o który poprosił klient (najwyżej 500 znaków)",
+          },
+        },
+        required: ["opis"],
+        additionalProperties: false,
+      },
+      {
+        // Ten sam warunek co w /api/image: tekst 1–500 znaków. Zły opis → błąd narzędzia, model obrazów nie jest wywoływany.
+        validate: (value) => {
+          const keys = typeof value === "object" && value !== null && !Array.isArray(value) ? Object.keys(value) : null;
+          const checked = keys && keys.length === 1 && keys[0] === "opis"
+            ? checkImagePrompt({ prompt: (value as { opis: unknown }).opis })
+            : null;
+          return checked?.ok
+            ? { success: true, value: { opis: checked.prompt } }
+            : { success: false, error: new Error(checked && !checked.ok ? checked.message : IMAGE_MESSAGES.badRequest) };
+        },
+      },
+    ),
+    execute: async ({ opis }, { abortSignal }): Promise<ImageToolOutput> => {
+      const result = await generateAmberImage({ model, prompt: opis, abortSignal, maxRetries, apiModelId });
+      if (!result.ok) {
+        console.error(`[Amber] Narzędzie generujObraz: ${result.details}`);
+        return { ok: false, error: result.message };
+      }
+      return { ok: true, image: result.dataUrl, model: result.modelId };
+    },
+    toModelOutput: ({ output }) => ({ type: "text", value: imageToolModelText(output) }),
+  });
+}
+
