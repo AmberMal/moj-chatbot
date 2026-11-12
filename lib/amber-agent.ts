@@ -1,6 +1,7 @@
 // Warsztat 3 (lekcja 3): jeden endpoint /api/agent z dwoma trybami.
 //   mode=chat    – streamText, zwykła odpowiedź tekstowa, narzędzia wybierane przez model
-//                  (web_search, aktualnyCzas, sprawdzObszar, informacjeOUrzadzeniu, generujObraz),
+//                  (web_search, sprawdzObszar, informacjeOUrzadzeniu, generujObraz oraz z lekcji 4:
+//                  pogoda, waluty, swieta, wikipedia, kalkulator, czas, notatki, diagnostyka),
 //                  stopWhen: isStepCount(5), podpis HMAC v5 odpowiedzi.
 //   mode=analyze – generateText + Output.object + walidator (generateAmberOutput z lekcji 2),
 //                  analiza wyłącznie tekstu z pola wejściowego, bez historii i bez narzędzi.
@@ -30,15 +31,103 @@ export const AGENT_MODES = ["chat", "analyze"] as const;
 export type AgentMode = (typeof AGENT_MODES)[number];
 
 // Narzędzia, których części mogą trafić do przeglądarki (inne są pomijane).
+// "aktualnyCzas" zostaje na liście tylko dla zgodności (zastąpione narzędziem "czas" w lekcji 4).
 export const AGENT_TOOL_NAMES = [
   "web_search",
   "aktualnyCzas",
   "sprawdzObszar",
   "informacjeOUrzadzeniu",
   "generujObraz",
+  "pogoda",
+  "waluty",
+  "swieta",
+  "wikipedia",
+  "kalkulator",
+  "czas",
+  "notatki",
+  "diagnostyka",
 ] as const;
 // Etykiety użytych narzędzi w metadanych (te same nazwy co w lib/amber-history.ts).
-const LABEL_ORDER = ["wyszukiwanie", "aktualnyCzas", "sprawdzObszar", "informacjeOUrzadzeniu", "generujObraz"] as const;
+const LABEL_ORDER = [
+  "wyszukiwanie",
+  "aktualnyCzas",
+  "czas",
+  "sprawdzObszar",
+  "informacjeOUrzadzeniu",
+  "pogoda",
+  "waluty",
+  "swieta",
+  "wikipedia",
+  "kalkulator",
+  "notatki",
+  "diagnostyka",
+  "generujObraz",
+] as const;
+// Limit kroków agenta (bez zmian: 5). Eksportowany dla narzędzia diagnostyka.
+export const AGENT_STEP_LIMIT = 5;
+
+// Lekcja 4 – limit wywołań narzędzi w jednej odpowiedzi (= limit części narzędzi w historii, 10).
+// Warstwa A: wywołanie ponad limit NIE jest wykonywane – model dostaje tylko komunikat o pominięciu,
+//            a przeglądarka nie dostaje jego części. Nic, z czego model skorzystał, nie jest ukrywane.
+//            Jedno miejsce jest zawsze zarezerwowane dla obrazu (generujObraz).
+// Warstwa B: po AGENT_TOOL_SOFT_LIMIT wywołaniach kolejne kroki nie mogą używać narzędzi (toolChoice: "none").
+// Musi być równe MAX_AGENT_TOOL_PARTS z lib/amber-history.ts (sprawdza to test; pliki lib/ nie importują się w czasie działania).
+export const AGENT_TOOL_CALL_LIMIT = 10;
+export const AGENT_TOOL_SOFT_LIMIT = 8;
+const IMAGE_TOOL_NAME = "generujObraz";
+export const TOOL_SKIPPED_MESSAGE =
+  "Pominięto: osiągnięto limit narzędzi w jednej odpowiedzi. Odpowiedz na podstawie dotychczasowych wyników " +
+  "i powiedz klientowi, czego nie sprawdziłaś – może zapytać o to w kolejnej wiadomości.";
+
+// Wspólny „budżet” wywołań jednej odpowiedzi. Decyzja dla danego toolCallId zapada raz i jest stała –
+// tak samo widzi ją filtr strumienia (części dla przeglądarki) i wykonanie narzędzia.
+export function createToolBudget(limit: number = AGENT_TOOL_CALL_LIMIT) {
+  const decisions = new Map<string, boolean>();
+  let admitted = 0;
+  let admittedOther = 0;
+  return {
+    admit(toolCallId: string, toolName: string): boolean {
+      const known = decisions.get(toolCallId);
+      if (known !== undefined) return known;
+      const isImage = toolName === IMAGE_TOOL_NAME;
+      const ok = admitted < limit && (isImage || admittedOther < limit - 1);
+      decisions.set(toolCallId, ok);
+      if (ok) {
+        admitted++;
+        if (!isImage) admittedOther++;
+      }
+      return ok;
+    },
+    get used() {
+      return decisions.size;
+    },
+    get admitted() {
+      return admitted;
+    },
+  };
+}
+export type ToolBudget = ReturnType<typeof createToolBudget>;
+
+// Narzędzia z naszym kodem (execute) sprawdzają budżet przed wykonaniem. Narzędzia wykonywane
+// przez dostawcę (web_search) nie mają execute – je pilnuje filtr strumienia i warstwa B.
+export function withToolBudget(tools: ToolSet, budget: ToolBudget): ToolSet {
+  const wrapped: ToolSet = {};
+  for (const [name, original] of Object.entries(tools)) {
+    const execute = (original as { execute?: (input: unknown, options: { toolCallId: string }) => unknown }).execute;
+    if (typeof execute !== "function") {
+      wrapped[name] = original;
+      continue;
+    }
+    wrapped[name] = {
+      ...original,
+      execute: async (input: unknown, options: { toolCallId: string }) => {
+        if (!budget.admit(options.toolCallId, name)) return { ok: false, pominieto: true, komunikat: TOOL_SKIPPED_MESSAGE };
+        return execute.call(original, input, options);
+      },
+    } as ToolSet[string];
+  }
+  return wrapped;
+}
 const MAX_STREAM_SOURCES = 6;
 
 export const AGENT_MESSAGES = {
@@ -55,7 +144,8 @@ export type AgentDeps = {
   // 1. Sesja (wywoływana jako pierwsza). null = brak ważnej sesji → 401.
   getSession: (req: Request) => { secret: string; token: string } | null;
   // 2. Modele i narzędzia – tworzone dopiero po sprawdzeniu sesji. null = brak konfiguracji → 500.
-  createModels: () => { model: LanguageModel; tools: ToolSet } | null;
+  //    sessionId – identyfikator sesji (np. dla notatek oddzielnych w każdej sesji).
+  createModels: (ctx: { sessionId: string }) => { model: LanguageModel; tools: ToolSet } | null;
   instructions: { chat: string; analyze: string };
   history: {
     deriveHistoryKey: (secret: string) => Buffer;
@@ -124,6 +214,24 @@ function isHttpUrl(value: unknown): value is string {
   }
 }
 
+function isWikipediaUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && url.hostname === "pl.wikipedia.org";
+  } catch {
+    return false;
+  }
+}
+
+type AgentUIChunk = Parameters<Parameters<Parameters<typeof createUIMessageStream<AgentUIMessage>>[0]["execute"]>[0]["writer"]["write"]>[0];
+
+// Kopia fragmentu strumienia bez pól z wewnętrznymi danymi dostawcy (providerMetadata itp.).
+export function withoutProviderMetadata<T>(chunk: T): T {
+  if (typeof chunk !== "object" || chunk === null) return chunk;
+  const { providerMetadata: _p, callProviderMetadata: _c, ...rest } = chunk as Record<string, unknown>;
+  return rest as T;
+}
+
 export function createAgentHandler(deps: AgentDeps) {
   const log = deps.log ?? ((message: string) => console.log(message));
   const now = deps.now ?? (() => new Date());
@@ -179,7 +287,7 @@ export function createAgentHandler(deps: AgentDeps) {
     }
 
     // 3. Konfiguracja modelu (klucz i model tylko po stronie serwera).
-    const models = deps.createModels();
+    const models = deps.createModels({ sessionId: sessionId || deps.history.sessionIdFromToken(session.token) });
     if (!models) return text(AGENT_MESSAGES.config, 500);
 
     if (mode === "analyze") {
@@ -224,13 +332,16 @@ function streamChat({
   now: () => Date;
 }): Response {
   const askedAboutImage = Boolean(turns[turns.length - 1]?.image);
+  const budget = createToolBudget();
 
   const result = streamText({
     model: models.model,
     instructions: deps.instructions.chat,
     messages: toModelMessages(turns),
-    tools: models.tools,
-    stopWhen: isStepCount(5),
+    tools: withToolBudget(models.tools, budget),
+    stopWhen: isStepCount(AGENT_STEP_LIMIT),
+    // Warstwa B: po 8 wywołaniach model ma już odpowiedzieć tekstem (bez kolejnych narzędzi).
+    prepareStep: () => (budget.used >= AGENT_TOOL_SOFT_LIMIT ? { toolChoice: "none" as const } : {}),
     abortSignal: req.signal,
     maxRetries: deps.maxRetries,
   });
@@ -238,12 +349,29 @@ function streamChat({
   const stream = createUIMessageStream<AgentUIMessage>({
     execute: async ({ writer }) => {
       // Dokładnie to, co zapisze przeglądarka – na tej podstawie liczymy podpis.
-      type Step = { textOrder: string[]; texts: Map<string, string>; sources: TurnSource[]; toolNames: string[] };
+      // searchSources – ile źródeł pochodzi z wyszukiwania (etykieta „wyszukiwanie”); źródła z Wikipedii jej nie dają.
+      type Step = { textOrder: string[]; texts: Map<string, string>; sources: TurnSource[]; toolNames: string[]; searchSources: number };
       const done: Step[] = [];
-      const newStep = (): Step => ({ textOrder: [], texts: new Map(), sources: [], toolNames: [] });
+      const newStep = (): Step => ({ textOrder: [], texts: new Map(), sources: [], toolNames: [], searchSources: 0 });
       let step = newStep();
       const seenUrls = new Set<string>();
       const allowedCalls = new Set<string>();
+      const callNames = new Map<string, string>();
+      // Lekcja 4: wewnętrzne dane dostawcy (np. reasoning_details – „myślenie” modelu) NIE trafiają do przeglądarki.
+      // Serwer ich nie potrzebuje z przeglądarki: pętla kroków działa w streamText (te dane zostają tam),
+      // a do modelu w kolejnych wiadomościach wraca wyłącznie podpisany tekst (toModelMessages).
+      const send = (chunk: AgentUIChunk) => writer.write(withoutProviderMetadata(chunk));
+      // Źródło dodane przez serwer (np. link z Wikipedii) – te same zasady co dla wyszukiwania.
+      const addSource = (url: string, rawTitle: string, sourceId: string, fromSearch: boolean): boolean => {
+        const all = [...done.flatMap((s) => s.sources), ...step.sources];
+        if (!isHttpUrl(url) || seenUrls.has(url) || all.length >= MAX_STREAM_SOURCES) return false;
+        seenUrls.add(url);
+        const title = rawTitle.trim().slice(0, 200);
+        step.sources.push({ url, title });
+        if (fromSearch) step.searchSources++;
+        writer.write({ type: "source-url", sourceId, url, title });
+        return true;
+      };
       let hadError = false;
       let finishReason: string | undefined;
 
@@ -262,53 +390,60 @@ function streamChat({
           case "text-start":
             step.textOrder.push(chunk.id);
             step.texts.set(chunk.id, "");
-            writer.write(chunk);
+            send(chunk);
             break;
           case "text-delta":
             step.texts.set(chunk.id, (step.texts.get(chunk.id) ?? "") + chunk.delta);
-            writer.write(chunk);
+            send(chunk);
             break;
-          case "source-url": {
+          case "source-url":
             // Tylko http/https, bez powtórzeń, najwyżej 6 (tak samo sprawdza historia).
-            const all = [...done.flatMap((s) => s.sources), ...step.sources];
-            if (!isHttpUrl(chunk.url) || seenUrls.has(chunk.url) || all.length >= MAX_STREAM_SOURCES) break;
-            seenUrls.add(chunk.url);
-            const title = typeof chunk.title === "string" ? chunk.title.trim().slice(0, 200) : "";
-            step.sources.push({ url: chunk.url, title });
-            writer.write({ type: "source-url", sourceId: chunk.sourceId, url: chunk.url, title });
+            addSource(chunk.url, typeof chunk.title === "string" ? chunk.title : "", chunk.sourceId, true);
             break;
-          }
           case "tool-input-start":
           case "tool-input-available":
           case "tool-input-error":
             // Tylko znane narzędzia (inne części byłyby odrzucone przez kontrolę historii).
             if (!(AGENT_TOOL_NAMES as readonly string[]).includes(chunk.toolName) || chunk.dynamic) break;
+            // Warstwa A: wywołanie ponad limit – bez części w przeglądarce i bez etykiety (nie zostało wykonane).
+            if (!budget.admit(chunk.toolCallId, chunk.toolName)) break;
             if (!allowedCalls.has(chunk.toolCallId)) {
               allowedCalls.add(chunk.toolCallId);
+              callNames.set(chunk.toolCallId, chunk.toolName);
               step.toolNames.push(chunk.toolName);
             }
-            writer.write(chunk);
+            send(chunk);
+            break;
+          case "tool-output-available":
+            if (!allowedCalls.has(chunk.toolCallId)) break;
+            send(chunk);
+            // Wikipedia: link do artykułu jako klikalne źródło pod odpowiedzią (tylko pl.wikipedia.org).
+            if (callNames.get(chunk.toolCallId) === "wikipedia") {
+              const out = chunk.output as { ok?: unknown; link?: unknown; tytul?: unknown } | null;
+              if (out?.ok === true && typeof out.link === "string" && isWikipediaUrl(out.link)) {
+                addSource(out.link, `Wikipedia: ${typeof out.tytul === "string" ? out.tytul : "artykuł"}`, `wiki-${chunk.toolCallId}`, false);
+              }
+            }
             break;
           case "tool-input-delta":
-          case "tool-output-available":
           case "tool-output-error":
           case "tool-output-denied":
-            if (allowedCalls.has(chunk.toolCallId)) writer.write(chunk);
+            if (allowedCalls.has(chunk.toolCallId)) send(chunk);
             break;
           case "start":
           case "start-step":
           case "text-end":
           case "finish-step":
           case "abort":
-            writer.write(chunk);
+            send(chunk);
             break;
           case "reset-step":
             step = newStep();
-            writer.write(chunk);
+            send(chunk);
             break;
           case "error":
             hadError = true;
-            writer.write(chunk);
+            send(chunk);
             break;
           case "finish":
             finishReason = chunk.finishReason;
@@ -333,9 +468,8 @@ function streamChat({
       const replyText = done.map((s) => s.textOrder.map((id) => s.texts.get(id) ?? "").join("")).join("");
       const sources = done.flatMap((s) => s.sources);
       const called = new Set(done.flatMap((s) => s.toolNames));
-      const tools = LABEL_ORDER.filter((name) =>
-        name === "wyszukiwanie" ? sources.length > 0 : called.has(name),
-      );
+      const searched = done.some((s) => s.searchSources > 0);
+      const tools = LABEL_ORDER.filter((name) => (name === "wyszukiwanie" ? searched : called.has(name)));
       const fetchedAt = sources.length > 0 ? formatFetchedAt(now()) : "";
       let model = "";
       if (askedAboutImage) {

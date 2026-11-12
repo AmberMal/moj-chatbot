@@ -32,6 +32,15 @@ const TOOL_LABELS: Record<string, string> = {
   sprawdzObszar: "📍 sprawdzObszar",
   informacjeOUrzadzeniu: "🔧 informacjeOUrzadzeniu",
   generujObraz: "🎨 generujObraz",
+  // Lekcja 4 (aktualnyCzas zostaje dla starszych rozmów).
+  czas: "🕒 czas",
+  pogoda: "🌤 pogoda",
+  waluty: "💱 waluty",
+  swieta: "📅 swieta",
+  wikipedia: "📖 wikipedia",
+  kalkulator: "🧮 kalkulator",
+  notatki: "📝 notatki",
+  diagnostyka: "🩺 diagnostyka",
 };
 
 // Lekcja 3 (Vision): zdjęcia jpg/png/webp do 4 MB. Przed wysłaniem przeglądarka

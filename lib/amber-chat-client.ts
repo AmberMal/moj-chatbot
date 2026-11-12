@@ -17,7 +17,9 @@ function hasSignature(message: UIMessage): boolean {
 // Historia wysyłana do /api/agent (mode=chat):
 // 1. odpowiedzi Amber BEZ podpisu (np. przerwane błędem) są pomijane – serwer i tak by je odrzucił;
 // 2. pełne zdjęcie klienta tylko w najnowszych wiadomościach (po ostatniej odpowiedzi Amber);
-// 3. wygenerowane obrazy NIE wracają na serwer (z wyniku narzędzia zostaje tylko { ok }).
+// 3. wygenerowane obrazy NIE wracają na serwer (z wyniku narzędzia zostaje tylko { ok });
+// 4. (lekcja 4) części innych narzędzi NIE wracają na serwer – serwer ich nie potrzebuje (nie są podpisane
+//    i nie trafiają do modelu). Zostaje tylko część obrazu. Rozmowa w przeglądarce wygląda tak samo.
 export function prepareAgentMessages(messages: UIMessage[]): UIMessage[] {
   const signed = messages.filter((message) => message.role !== "assistant" || hasSignature(message));
   const lastAssistant = signed.map((message) => message.role).lastIndexOf("assistant");
@@ -27,14 +29,18 @@ export function prepareAgentMessages(messages: UIMessage[]): UIMessage[] {
       const parts = message.parts.filter((part) => part.type !== "file");
       return { ...message, parts: parts.length > 0 ? parts : [{ type: "text" as const, text: "" }] };
     }
-    const parts = message.parts.map((part) => {
-      if (part.type === "tool-generujObraz" && "output" in part && part.output !== undefined) {
-        const ok = (part.output as { ok?: unknown } | null)?.ok === true;
-        return { ...part, output: { ok } };
-      }
-      return part;
-    });
-    return { ...message, parts } as UIMessage;
+    const parts = message.parts
+      .filter((part) => !part.type.startsWith("tool-") || part.type === "tool-generujObraz")
+      .map((part) => {
+        if (part.type === "tool-generujObraz" && "output" in part && part.output !== undefined) {
+          const ok = (part.output as { ok?: unknown } | null)?.ok === true;
+          return { ...part, output: { ok } };
+        }
+        return part;
+      });
+    // Odpowiedź bez tekstu i bez obrazu (np. same narzędzia) – pusty tekst, żeby historia pozostała poprawna.
+    const hasContent = parts.some((part) => part.type === "text" || part.type === "tool-generujObraz");
+    return { ...message, parts: hasContent ? parts : [...parts, { type: "text" as const, text: "" }] } as UIMessage;
   });
 }
 

@@ -42,6 +42,15 @@ export const HISTORY_TOOL_NAMES = [
   "sprawdzObszar",
   "informacjeOUrzadzeniu",
   "generujObraz",
+  // Lekcja 4 ("aktualnyCzas" zostaje wyżej dla zgodności ze starszymi rozmowami).
+  "pogoda",
+  "waluty",
+  "swieta",
+  "wikipedia",
+  "kalkulator",
+  "czas",
+  "notatki",
+  "diagnostyka",
 ] as const;
 
 // Warsztat 3: odpowiedź czatu z /api/agent (mode=chat).
@@ -55,6 +64,15 @@ export const AGENT_TOOL_PART_TYPES = [
   "tool-sprawdzObszar",
   "tool-informacjeOUrzadzeniu",
   "tool-generujObraz",
+  // Lekcja 4 ("tool-aktualnyCzas" zostaje wyżej dla zgodności ze starszymi rozmowami).
+  "tool-pogoda",
+  "tool-waluty",
+  "tool-swieta",
+  "tool-wikipedia",
+  "tool-kalkulator",
+  "tool-czas",
+  "tool-notatki",
+  "tool-diagnostyka",
 ] as const;
 export const MAX_AGENT_TOOL_PARTS = 10;
 export const MAX_HISTORY_SOURCES = 6;

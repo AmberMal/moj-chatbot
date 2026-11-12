@@ -1,8 +1,15 @@
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
+import type { ToolSet } from "ai";
 import { SESSION_COOKIE, getAuthConfig, isSessionValid, readCookie } from "../../../lib/auth";
-import { AMBER_ANALYZE_INSTRUCTIONS, AMBER_CHAT_INSTRUCTIONS } from "../../../lib/amber-instructions";
+import {
+  AMBER_ANALYZE_INSTRUCTIONS,
+  AMBER_CHAT_INSTRUCTIONS,
+  AMBER_CHAT_INSTRUCTIONS_DEV,
+} from "../../../lib/amber-instructions";
 import { generateAmberOutput } from "../../../lib/amber-output";
-import { aktualnyCzas, informacjeOUrzadzeniu, sprawdzObszar } from "../../../lib/amber-tools";
+import { informacjeOUrzadzeniu, sprawdzObszar } from "../../../lib/amber-tools";
+import { createDiagnosticsTool, createNotesTool, czas, kalkulator } from "../../../lib/amber-tools-local";
+import { createCurrencyTool, createHolidaysTool, createWeatherTool, createWikipediaTool } from "../../../lib/amber-tools-api";
 import { IMAGE_MODEL_ID, createImageTool } from "../../../lib/amber-image";
 import {
   MAX_USER_MESSAGE_CHARS,
@@ -15,6 +22,9 @@ import { createAgentHandler } from "../../../lib/amber-agent";
 
 // Warsztat 3: jeden endpoint, dwa tryby (mode=chat, mode=analyze). Logika: lib/amber-agent.ts.
 // Ten plik działa tylko na serwerze – klucz API nie trafia do przeglądarki.
+// Diagnostyka tylko w środowisku testowym (`npm run dev`). Po `npm run build` (także na Vercelu) NODE_ENV = "production".
+const DEV_DIAGNOSTICS = process.env.NODE_ENV === "development";
+
 export async function POST(req: Request) {
   const handle = createAgentHandler({
     // 1. Sesja – sprawdzana jako pierwsza (bez niej 401).
@@ -25,7 +35,7 @@ export async function POST(req: Request) {
       return { secret: authConfig.secret, token };
     },
     // 2. Model i narzędzia – dopiero po sprawdzeniu sesji.
-    createModels: () => {
+    createModels: ({ sessionId }) => {
       const apiKey = process.env.OPENROUTER_API_KEY;
       const modelId = process.env.OPENROUTER_MODEL;
       if (!apiKey || !modelId) return null;
@@ -48,21 +58,30 @@ export async function POST(req: Request) {
         },
       });
 
-      return {
-        model: openrouter(modelId),
-        tools: {
-          web_search: openrouter.tools.webSearch({ maxResults: 3, engine: "native" }),
-          aktualnyCzas,
-          sprawdzObszar,
-          informacjeOUrzadzeniu,
-          generujObraz: createImageTool({
-            model: imageProvider.imageModel(IMAGE_MODEL_ID),
-            apiModelId: () => apiImageModel,
-          }),
-        },
+      const tools: ToolSet = {
+        web_search: openrouter.tools.webSearch({ maxResults: 3, engine: "native" }),
+        sprawdzObszar,
+        informacjeOUrzadzeniu,
+        generujObraz: createImageTool({
+          model: imageProvider.imageModel(IMAGE_MODEL_ID),
+          apiModelId: () => apiImageModel,
+        }),
+        // Lekcja 4: osiem narzędzi pomocniczych ("czas" zastępuje dawne "aktualnyCzas").
+        pogoda: createWeatherTool(),
+        waluty: createCurrencyTool(),
+        swieta: createHolidaysTool(),
+        wikipedia: createWikipediaTool(),
+        kalkulator,
+        czas,
+        notatki: createNotesTool(sessionId),
       };
+      if (DEV_DIAGNOSTICS) {
+        // Tylko przy npm run dev. Zwraca „konfiguracja kompletna: tak/nie” – bez nazw zmiennych i wartości.
+        tools.diagnostyka = createDiagnosticsTool({ env: process.env });
+      }
+      return { model: openrouter(modelId), tools };
     },
-    instructions: { chat: AMBER_CHAT_INSTRUCTIONS, analyze: AMBER_ANALYZE_INSTRUCTIONS },
+    instructions: { chat: DEV_DIAGNOSTICS ? AMBER_CHAT_INSTRUCTIONS_DEV : AMBER_CHAT_INSTRUCTIONS, analyze: AMBER_ANALYZE_INSTRUCTIONS },
     history: { deriveHistoryKey, sessionIdFromToken, checkChatHistory, signAgentChatTurn },
     generateAmberOutput,
     maxTextChars: MAX_USER_MESSAGE_CHARS,
