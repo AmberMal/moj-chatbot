@@ -2,7 +2,7 @@
 //   mode=chat    – streamText, zwykła odpowiedź tekstowa, narzędzia wybierane przez model
 //                  (web_search, sprawdzObszar, informacjeOUrzadzeniu, generujObraz oraz z lekcji 4:
 //                  pogoda, waluty, swieta, wikipedia, kalkulator, czas, notatki, diagnostyka),
-//                  stopWhen: isStepCount(5), podpis HMAC v5 odpowiedzi.
+//                  stopWhen: isStepCount(6) (lekcja 4, ReAct), podpis HMAC v5 odpowiedzi.
 //   mode=analyze – generateText + Output.object + walidator (generateAmberOutput z lekcji 2),
 //                  analiza wyłącznie tekstu z pola wejściowego, bez historii i bez narzędzi.
 //
@@ -63,8 +63,11 @@ const LABEL_ORDER = [
   "diagnostyka",
   "generujObraz",
 ] as const;
-// Limit kroków agenta (bez zmian: 5). Eksportowany dla narzędzia diagnostyka.
-export const AGENT_STEP_LIMIT = 5;
+// Lekcja 4, Warsztat 2 (ReAct): najwyżej 6 kroków modelu na jedno zadanie. Wszystkie mogą używać narzędzi.
+// Jeśli po ostatnim kroku agent nadal chce użyć narzędzia, serwer zatrzymuje pętlę i dopisuje
+// komunikat „Zatrzymałem się po N krokach” z podsumowaniem rzeczywistych wyników narzędzi.
+export const AGENT_STEP_LIMIT = 6;
+export const stepLimitMessage = (limit: number) => `Zatrzymałem się po ${limit} krokach`;
 
 // Lekcja 4 – limit wywołań narzędzi w jednej odpowiedzi (= limit części narzędzi w historii, 10).
 // Warstwa A: wywołanie ponad limit NIE jest wykonywane – model dostaje tylko komunikat o pominięciu,
@@ -162,6 +165,8 @@ export type AgentDeps = {
   }) => Promise<AmberResult>;
   maxTextChars: number;
   maxRetries?: number;
+  // Limit kroków (domyślnie AGENT_STEP_LIMIT = 6). Inna wartość tylko w testach.
+  stepLimit?: number;
   now?: () => Date;
   log?: (message: string) => void;
 };
@@ -230,6 +235,77 @@ export function withoutProviderMetadata<T>(chunk: T): T {
   if (typeof chunk !== "object" || chunk === null) return chunk;
   const { providerMetadata: _p, callProviderMetadata: _c, ...rest } = chunk as Record<string, unknown>;
   return rest as T;
+}
+
+// ---------------------------------------------------------------------------
+// ReAct: podsumowanie po limicie kroków – tylko z rzeczywistych wyników narzędzi (bez dodatkowego wywołania modelu).
+// ---------------------------------------------------------------------------
+export type StepResult = { step: number; name: string; input: unknown; kind: "ok" | "error" | "inputError"; output?: unknown };
+
+const num = (v: unknown) => (typeof v === "number" ? v.toLocaleString("pl-PL", { maximumFractionDigits: 4 }) : "?");
+const str = (v: unknown) => (typeof v === "string" ? v : "");
+
+// Jedna linia z wyniku narzędzia. null = pomiń (np. wywołanie pominięte przez limit narzędzi).
+export function describeToolResult(r: StepResult): string | null {
+  if (r.kind === "inputError") return `${r.name}: nieprawidłowe dane wejściowe – nie wykonano`;
+  if (r.kind === "error") return `${r.name}: błąd narzędzia – brak wyniku`;
+  const o = (typeof r.output === "object" && r.output !== null ? r.output : {}) as Record<string, unknown>;
+  if (o.pominieto === true) return null;
+  if (o.ok === false) return `${r.name}: ${str(o.komunikat) || str(o.message) || "brak wyniku"}`;
+  switch (r.name) {
+    case "pogoda":
+      return `pogoda (${str(o.miasto)}, ${str(o.data)}): ${num(o.temperaturaMinC)}–${num(o.temperaturaMaxC)}°C, ${str(o.opis)}, opady ${num(o.opadyMm)} mm`;
+    case "waluty":
+      return (
+        `waluty: 1 ${str(o.kod)} = ${num(o.kursPLN)} zł (NBP, ${str(o.dataKursu)})` +
+        (typeof o.kwota === "number" ? `; ${num(o.kwota)} ${str(o.kod)} = ${num(o.kwotaPLN)} zł` : "")
+      );
+    case "swieta": {
+      const list = Array.isArray(o.swieta) ? (o.swieta as Array<Record<string, unknown>>) : [];
+      const first = list.slice(0, 3).map((h) => `${str(h.data)} ${str(h.nazwaLokalna)}`).join(", ");
+      return `swieta (${str(o.kraj)}, ${num(o.rok).replace(/\s/g, "")}): ${list.length} dni wolnych${first ? ` – pierwsze: ${first}` : ""}`;
+    }
+    case "wikipedia": {
+      const first = str(o.streszczenie).split(/(?<=[.!?])\s/)[0];
+      return `wikipedia (${str(o.tytul)}): ${first}`;
+    }
+    case "kalkulator":
+      return `kalkulator: ${str(o.dzialanie)} (${Array.isArray(o.liczby) ? o.liczby.map(num).join("; ") : ""}) = ${num(o.wynik)}`;
+    case "czas":
+    case "aktualnyCzas":
+      return `czas (${str(o.strefa)}): ${str(o.data)}, ${str(o.dzienTygodnia)}, ${str(o.godzina)}`;
+    case "notatki":
+      return o.akcja === "zapisz"
+        ? `notatki: zapisano „${str((o.zapisano as Record<string, unknown> | undefined)?.tresc)}” (notatki są tymczasowe)`
+        : `notatki: ${Array.isArray(o.notatki) ? o.notatki.length : 0} zapisanych (notatki są tymczasowe)`;
+    case "diagnostyka":
+      return `diagnostyka: konfiguracja kompletna: ${str(o.konfiguracjaKompletna)}`;
+    case "sprawdzObszar":
+      return `sprawdzObszar (${str(o.kodPocztowy)}): ${str(o.komunikat)}`;
+    case "informacjeOUrzadzeniu":
+      return `informacjeOUrzadzeniu (${str(o.producent)}): ${str(o.komunikat)}`;
+    case "generujObraz":
+      return "generujObraz: obraz gotowy";
+    default:
+      return null;
+  }
+}
+
+export function buildStepLimitSummary(limit: number, results: StepResult[], searched: boolean): string {
+  const seen = new Set<string>();
+  const lines: string[] = [];
+  for (const r of results) {
+    const key = `${r.name}|${JSON.stringify(r.input ?? null)}|${r.kind}`;
+    if (seen.has(key)) continue; // to samo narzędzie z tymi samymi danymi – pokazujemy raz
+    seen.add(key);
+    const line = describeToolResult(r);
+    if (line) lines.push(`– ${line}`);
+  }
+  if (searched) lines.push("– wyszukiwanie: źródła są pod odpowiedzią");
+  if (lines.length === 0) {
+    return `${stepLimitMessage(limit)}. Nie udało się jeszcze ustalić wyników – proszę zadać pytanie prościej lub w kilku częściach.`;
+  }
+  return `${stepLimitMessage(limit)}. Udało się ustalić:\n${lines.join("\n")}`;
 }
 
 export function createAgentHandler(deps: AgentDeps) {
@@ -333,13 +409,14 @@ function streamChat({
 }): Response {
   const askedAboutImage = Boolean(turns[turns.length - 1]?.image);
   const budget = createToolBudget();
+  const stepLimit = deps.stepLimit ?? AGENT_STEP_LIMIT;
 
   const result = streamText({
     model: models.model,
     instructions: deps.instructions.chat,
     messages: toModelMessages(turns),
     tools: withToolBudget(models.tools, budget),
-    stopWhen: isStepCount(AGENT_STEP_LIMIT),
+    stopWhen: isStepCount(stepLimit),
     // Warstwa B: po 8 wywołaniach model ma już odpowiedzieć tekstem (bez kolejnych narzędzi).
     prepareStep: () => (budget.used >= AGENT_TOOL_SOFT_LIMIT ? { toolChoice: "none" as const } : {}),
     abortSignal: req.signal,
@@ -357,6 +434,10 @@ function streamChat({
       const seenUrls = new Set<string>();
       const allowedCalls = new Set<string>();
       const callNames = new Map<string, string>();
+      // ReAct: rzeczywiste wyniki narzędzi (do podsumowania po limicie kroków) i numer kroku.
+      const callInputs = new Map<string, unknown>();
+      const results: StepResult[] = [];
+      let stepCount = 0;
       // Lekcja 4: wewnętrzne dane dostawcy (np. reasoning_details – „myślenie” modelu) NIE trafiają do przeglądarki.
       // Serwer ich nie potrzebuje z przeglądarki: pętla kroków działa w streamText (te dane zostają tam),
       // a do modelu w kolejnych wiadomościach wraca wyłącznie podpisany tekst (toModelMessages).
@@ -412,11 +493,22 @@ function streamChat({
               callNames.set(chunk.toolCallId, chunk.toolName);
               step.toolNames.push(chunk.toolName);
             }
+            if (chunk.type === "tool-input-available") callInputs.set(chunk.toolCallId, chunk.input);
+            if (chunk.type === "tool-input-error") {
+              results.push({ step: stepCount, name: chunk.toolName, input: chunk.input, kind: "inputError" });
+            }
             send(chunk);
             break;
           case "tool-output-available":
             if (!allowedCalls.has(chunk.toolCallId)) break;
             send(chunk);
+            results.push({
+              step: stepCount,
+              name: callNames.get(chunk.toolCallId) ?? "",
+              input: callInputs.get(chunk.toolCallId),
+              kind: "ok",
+              output: chunk.output,
+            });
             // Wikipedia: link do artykułu jako klikalne źródło pod odpowiedzią (tylko pl.wikipedia.org).
             if (callNames.get(chunk.toolCallId) === "wikipedia") {
               const out = chunk.output as { ok?: unknown; link?: unknown; tytul?: unknown } | null;
@@ -425,8 +517,12 @@ function streamChat({
               }
             }
             break;
-          case "tool-input-delta":
           case "tool-output-error":
+            if (!allowedCalls.has(chunk.toolCallId)) break;
+            send(chunk);
+            results.push({ step: stepCount, name: callNames.get(chunk.toolCallId) ?? "", input: callInputs.get(chunk.toolCallId), kind: "error" });
+            break;
+          case "tool-input-delta":
           case "tool-output-denied":
             if (allowedCalls.has(chunk.toolCallId)) send(chunk);
             break;
@@ -455,6 +551,7 @@ function streamChat({
         if (chunk.type === "finish-step") {
           done.push(step);
           step = newStep();
+          stepCount++;
         }
       }
       done.push(step);
@@ -465,7 +562,30 @@ function streamChat({
         return;
       }
 
-      const replyText = done.map((s) => s.textOrder.map((id) => s.texts.get(id) ?? "").join("")).join("");
+      // „tool-calls” na końcu = model chciał dalej używać narzędzi, ale pętla doszła do limitu kroków.
+      let finalReason = finishReason;
+      try {
+        finalReason = (await result.finishReason) ?? finalReason;
+      } catch {
+        // brak informacji – zostaje wartość ze strumienia
+      }
+      const stepTexts = done.map((s) => s.textOrder.map((id) => s.texts.get(id) ?? "").join(""));
+      const modelText = stepTexts.join("");
+      const reachedLimit = finalReason === "tool-calls" && stepCount >= stepLimit;
+      let replyText = modelText;
+      if (reachedLimit) {
+        // Wariant B: podsumowanie wyłącznie z rzeczywistych wyników; tylko to, czego model jeszcze nie napisał.
+        const lastTextStep = stepTexts.reduce((last, t, i) => (t.trim() ? i : last), -1);
+        const searchedAfter = done.slice(Math.max(lastTextStep, 0)).some((s) => s.searchSources > 0);
+        const summary = buildStepLimitSummary(stepLimit, results.filter((r) => r.step >= lastTextStep), searchedAfter);
+        const limitText = (modelText.trim() ? "\n\n" : "") + summary;
+        const id = "amber-step-limit";
+        writer.write({ type: "text-start", id });
+        writer.write({ type: "text-delta", id, delta: limitText });
+        writer.write({ type: "text-end", id });
+        replyText = modelText + limitText;
+        log(`[Amber] /api/agent – ${stepLimitMessage(stepLimit)} (podsumowanie: ${results.length} wyników).`);
+      }
       const sources = done.flatMap((s) => s.sources);
       const called = new Set(done.flatMap((s) => s.toolNames));
       const searched = done.some((s) => s.searchSources > 0);
@@ -494,15 +614,6 @@ function streamChat({
       if (sources.length > 0) log(`[Amber] /api/agent – źródła (${sources.length}): ${sources.map((s) => s.url).join(" | ")}`);
       if (tools.length > 0) log(`[Amber] /api/agent – użyte narzędzia: ${tools.join(", ")}`);
       if (askedAboutImage) log(`[Amber] /api/agent – zdjęcie przeanalizował model: ${model || "(brak w odpowiedzi API)"}`);
-
-      // „tool-calls” na końcu = model zatrzymany limitem kroków (stopWhen: isStepCount(5)) – przeglądarka pokaże komunikat.
-      let finalReason = finishReason;
-      try {
-        finalReason = (await result.finishReason) ?? finalReason;
-      } catch {
-        // brak informacji – zostaje wartość ze strumienia
-      }
-      if (finalReason === "tool-calls") log("[Amber] /api/agent – osiągnięto limit 5 kroków.");
 
       writer.write({ type: "finish", finishReason: (finalReason as "stop") ?? "stop", messageMetadata: metadata });
     },

@@ -12,10 +12,12 @@ import {
   TOOL_SKIPPED_MESSAGE,
   createAgentHandler,
   createToolBudget,
+  buildStepLimitSummary,
+  stepLimitMessage,
 } from "../lib/amber-agent.ts";
 import { MockImageModelV4 } from "ai/test";
 import { IMAGE_MODEL_ID, createImageTool } from "../lib/amber-image.ts";
-import { prepareAgentMessages } from "../lib/amber-chat-client.ts";
+import { buildStepList, formatStepList, prepareAgentMessages, STEP_LIMIT_MESSAGE } from "../lib/amber-chat-client.ts";
 import { SESSION_COOKIE, createSessionToken, isSessionValid, readCookie } from "../lib/auth.ts";
 import { AMBER_ANALYZE_INSTRUCTIONS, AMBER_CHAT_INSTRUCTIONS, AMBER_CHAT_INSTRUCTIONS_DEV } from "../lib/amber-instructions.ts";
 import { generateAmberOutput } from "../lib/amber-output.ts";
@@ -619,6 +621,176 @@ console.log("\n=== 11. Wikipedia jako źródło, dane dostawcy poza przeglądark
     const { message } = await readChat(await h(request({ mode: "chat", messages: [user("u1", "X")] })));
     check(`Wikipedia (${name}) → bez źródła, odpowiedź podpisana`, !message.parts.some((p) => p.type === "source-url") && typeof message.metadata?.sig === "string");
   }
+}
+
+console.log("\n=== 13. ReAct: limit 6 kroków, podsumowanie, lista kroków ===");
+function reactHandler(model, { stepLimit, tools } = {}) {
+  return createAgentHandler({
+    getSession: () => ({ secret: AUTH.secret, token: TOKEN }),
+    createModels: () => ({
+      model,
+      tools: tools ?? {
+        pogoda: createWeatherTool({ fetch: API_FETCH, now }),
+        waluty: createCurrencyTool({ fetch: API_FETCH, now }),
+        kalkulator,
+        czas,
+      },
+    }),
+    instructions: { chat: AMBER_CHAT_INSTRUCTIONS, analyze: AMBER_ANALYZE_INSTRUCTIONS },
+    history: { deriveHistoryKey, sessionIdFromToken, checkChatHistory, signAgentChatTurn },
+    generateAmberOutput, maxTextChars: MAX_USER_MESSAGE_CHARS, maxRetries: 0, now: () => NOW, log: () => {},
+    ...(stepLimit ? { stepLimit } : {}),
+  });
+}
+const textOf = (m) => m.parts.filter((p) => p.type === "text").map((p) => p.text).join("");
+check("AGENT_STEP_LIMIT = 6", AGENT_STEP_LIMIT === 6);
+check("Komunikat dokładnie „Zatrzymałem się po 6 krokach”", stepLimitMessage(6) === "Zatrzymałem się po 6 krokach");
+check("Instrukcja: sekcja PRACA KROK PO KROKU", /PRACA KROK PO KROKU:\n- Przy zadaniu złożonym pracuj krok po kroku: użyj narzędzia, przeczytaj wynik i dopiero wtedy zdecyduj o następnym kroku\.\n- Nie zgaduj danych, które możesz sprawdzić narzędziem\./.test(AMBER_CHAT_INSTRUCTIONS));
+check("Instrukcja ReAct tylko w czacie (nie w analizie)", !AMBER_ANALYZE_INSTRUCTIONS.includes("PRACA KROK PO KROKU"));
+{
+  // Pętla, która ciągle chce narzędzi: 6 różnych miast, potem nadal chce dalej.
+  const cities = ["Londyn", "Warszawa", "Paryż", "Berlin", "Madryt", "Rzym", "Wiedeń"];
+  const model = chatModel(cities.map((m, i) => [call(`r${i}`, "pogoda", { miasto: m, data: "2026-11-13" }), toolCallsFinish]));
+  const res = await reactHandler(model)(request({ mode: "chat", messages: [user("u1", "Pogoda w wielu miastach")] }));
+  const { message, raw } = await readChat(res);
+  const text = textOf(message);
+  check("Limit: dokładnie 6 kroków modelu", model.doStreamCalls.length === 6, String(model.doStreamCalls.length));
+  check("Limit: wszystkie 6 kroków mogło użyć narzędzi (toolChoice nie „none”)", model.doStreamCalls.every((c) => c.toolChoice?.type !== "none"));
+  check("Limit: tekst zaczyna się od „Zatrzymałem się po 6 krokach. Udało się ustalić:”", text.startsWith("Zatrzymałem się po 6 krokach. Udało się ustalić:"), text.slice(0, 60));
+  const lines = text.split("\n").filter((l) => l.startsWith("– "));
+  check("Podsumowanie: 6 rzeczywistych wyników (szósty krok też)", lines.length === 6 && lines.every((l) => l.startsWith("– pogoda (")), JSON.stringify(lines));
+  check("Podsumowanie z danych narzędzia (Londyn, 13.11: 3,4–9,8°C, deszcz, 6,2 mm)", lines[0] === "– pogoda (Londyn, 2026-11-13): 3,4–9,8°C, deszcz, opady 6,2 mm", lines[0]);
+  check("Podsumowanie bez 7. miasta (nie wykonano)", !text.includes("Wiedeń"));
+  check("Limit: odpowiedź podpisana, status 200", res.status === 200 && typeof message.metadata?.sig === "string");
+  check("Lista kroków: 1. pogoda → … → 6. pogoda", formatStepList(buildStepList(message)) === "1. pogoda → 2. pogoda → 3. pogoda → 4. pogoda → 5. pogoda → 6. pogoda", formatStepList(buildStepList(message)));
+  check("finishReason „tool-calls”, ale tekst jest – bez dodatkowego komunikatu przeglądarki", raw.includes('"finishReason":"tool-calls"') && text.length > 0 && STEP_LIMIT_MESSAGE.includes("6 kroków"));
+  // Kolejne wiadomości w tej samej rozmowie.
+  const sent = prepareAgentMessages([user("u1", "Pogoda w wielu miastach"), message, user("u2", "A Wiedeń?")]);
+  const model2 = chatModel([[call("v1", "pogoda", { miasto: "Wiedeń", data: "2026-11-13" }), toolCallsFinish], [...textChunks("W Wiedniu deszcz."), stop]]);
+  const r2 = await reactHandler(model2)(request({ mode: "chat", messages: sent }));
+  const { message: m2 } = await readChat(r2);
+  check("Po limicie: kolejna wiadomość → 200, nowy licznik kroków (2 kroki)", r2.status === 200 && model2.doStreamCalls.length === 2 && textOf(m2) === "W Wiedniu deszcz.");
+  check("Model widzi podsumowanie z poprzedniej odpowiedzi (ciągłość)", JSON.stringify(model2.doStreamCalls[0].prompt).includes("Zatrzymałem się po 6 krokach"));
+  const r3 = await reactHandler(chatModel([[...textChunks("Proszę."), stop]]))(request({ mode: "chat", messages: prepareAgentMessages([...sent, m2, user("u3", "Dziękuję")]) }));
+  check("Trzecia wiadomość → 200", r3.status === 200);
+  // Podmienione podsumowanie → podpis HMAC nie pasuje.
+  const forged = JSON.parse(JSON.stringify(sent));
+  const tp = forged[1].parts.filter((p) => p.type === "text").pop();
+  tp.text = tp.text.replace("Londyn", "Lizbona");
+  const w = console.warn; console.warn = () => {};
+  const r4 = await reactHandler(chatModel([[...textChunks("x"), stop]]))(request({ mode: "chat", messages: forged }));
+  console.warn = w;
+  check("Podmienione podsumowanie → 400 (podpis HMAC)", r4.status === 400);
+}
+{
+  // Wcześniejszy tekst modelu zostaje; podsumowanie tylko z wyników po tym tekście; bez powtórzeń.
+  const steps = [
+    [call("a1", "pogoda", { miasto: "Londyn", data: "2026-11-13" }), toolCallsFinish],
+    [...textChunks("W Londynie jutro deszcz, 3,4–9,8°C. Sprawdzam dalej."), call("a2", "czas", {}), toolCallsFinish],
+    [call("a3", "czas", {}), toolCallsFinish],
+    [call("a4", "czas", {}), toolCallsFinish],
+    [call("a5", "waluty", { waluta: "EUR" }), toolCallsFinish],
+    [call("a6", "kalkulator", { dzialanie: "podziel", liczby: [1500, 4.2512] }), toolCallsFinish],
+  ];
+  const model = chatModel(steps);
+  const { message } = await readChat(await reactHandler(model)(request({ mode: "chat", messages: [user("u1", "x")] })));
+  const text = textOf(message);
+  check("Wcześniejszy tekst modelu zachowany na początku", text.startsWith("W Londynie jutro deszcz, 3,4–9,8°C. Sprawdzam dalej.\n\nZatrzymałem się po 6 krokach. Udało się ustalić:"), text.slice(0, 90));
+  check("Bez powtórzenia pogody (już opisanej przez model)", !text.includes("– pogoda ("));
+  check("czas 3 razy z tymi samymi danymi → pokazany raz", (text.match(/– czas \(/g) ?? []).length === 1, text);
+  check("waluty i kalkulator w podsumowaniu", text.includes("– waluty: 1 EUR = 4,2512 zł (NBP, 2026-11-12)") && text.includes("– kalkulator: podziel (1500; 4,2512) = 352,8416"), JSON.stringify(text));
+  check("Lista kroków z tekstem: 1. pogoda → 2. czas → … → 6. kalkulator", formatStepList(buildStepList(message)) === "1. pogoda → 2. czas → 3. czas → 4. czas → 5. waluty → 6. kalkulator", formatStepList(buildStepList(message)));
+}
+{
+  // Komunikat TYLKO przy rzeczywistym limicie: zakończenie w 1, 3 i dokładnie 6 krokach.
+  for (const n of [1, 3, 6]) {
+    const steps = [];
+    for (let i = 0; i < n - 1; i++) steps.push([call(`e${n}${i}`, "czas", { strefa: ["Europe/London", "Europe/Warsaw", "Asia/Tokyo", "America/New_York", "Europe/Paris"][i] }), toolCallsFinish]);
+    steps.push([...textChunks(`Gotowe po ${n} krokach.`), stop]);
+    const model = chatModel(steps);
+    const { message } = await readChat(await reactHandler(model)(request({ mode: "chat", messages: [user("u1", "x")] })));
+    check(`Zakończenie w ${n} krok(ach) → bez komunikatu o zatrzymaniu`, model.doStreamCalls.length === n && textOf(message) === `Gotowe po ${n} krokach.` && !textOf(message).includes("Zatrzymałem"));
+  }
+}
+{
+  // Błędy narzędzi w podsumowaniu (złe dane, komunikat API) i brak wyników.
+  const steps = Array.from({ length: 6 }, (_, i) => [
+    i === 0 ? call("x0", "waluty", { waluta: "EURO" }) : i === 1 ? call("x1", "pogoda", { miasto: "Xyzabc" }) : call(`x${i}`, "kalkulator", { dzialanie: "podziel", liczby: [1, 0] }),
+    toolCallsFinish,
+  ]);
+  const errF = fakeFetch([["geocoding-api", { results: [] }]]);
+  const model = chatModel(steps);
+  const e = console.error; console.error = () => {};
+  const { message } = await readChat(await reactHandler(model, { tools: { pogoda: createWeatherTool({ fetch: errF, now }), waluty: createCurrencyTool({ fetch: errF, now }), kalkulator } })(request({ mode: "chat", messages: [user("u1", "x")] })));
+  console.error = e;
+  const text = textOf(message);
+  check("Błąd danych wejściowych w podsumowaniu", text.includes("– waluty: nieprawidłowe dane wejściowe – nie wykonano"), text);
+  check("Komunikat API w podsumowaniu (brak miasta)", text.includes("– pogoda: Nie znalazłam miasta „Xyzabc”"));
+  check("Komunikat kalkulatora pokazany raz", (text.match(/Nie można dzielić przez zero/g) ?? []).length === 1);
+  check("Lista kroków z błędem: „1. waluty (błąd)”", formatStepList(buildStepList(message)).startsWith("1. waluty (błąd) → 2. pogoda → 3. kalkulator"), formatStepList(buildStepList(message)));
+  check("Brak wyników → komunikat bez zmyślonych danych", buildStepLimitSummary(6, [], false) === "Zatrzymałem się po 6 krokach. Nie udało się jeszcze ustalić wyników – proszę zadać pytanie prościej lub w kilku częściach.");
+  check("Pominięte przez limit narzędzi nie trafiają do podsumowania", buildStepLimitSummary(6, [{ step: 0, name: "pogoda", input: {}, kind: "ok", output: { ok: false, pominieto: true, komunikat: TOOL_SKIPPED_MESSAGE } }], false).startsWith("Zatrzymałem się po 6 krokach. Nie udało"));
+}
+{
+  // Test z materiałów 1: łańcuch narzędzi – kurs EUR z NBP, potem 1500 PLN → EUR z użyciem tego kursu.
+  let rateSeen = null;
+  let step = 0;
+  const model = new MockLanguageModelV4({
+    doStream: async ({ prompt }) => {
+      step++;
+      let chunks;
+      if (step === 1) chunks = [call("n1", "waluty", { waluta: "EUR" }), toolCallsFinish];
+      else if (step === 2) {
+        // Model czyta wynik pierwszego kroku z rozmowy i używa go jako argumentu kalkulatora.
+        const res = prompt.flatMap((m) => (Array.isArray(m.content) ? m.content : [])).find((c) => c.type === "tool-result" && c.toolName === "waluty");
+        rateSeen = res?.output?.value?.kursPLN ?? null;
+        chunks = [call("n2", "kalkulator", { dzialanie: "podziel", liczby: [1500, rateSeen] }), toolCallsFinish];
+      } else chunks = [...textChunks("1500 PLN to ok. 352,84 EUR (kurs NBP 4,2512)."), stop];
+      return { stream: streamOf([{ type: "response-metadata", id: "r", modelId: "google/gemini-test", timestamp: new Date(0) }, ...chunks]) };
+    },
+  });
+  const { message } = await readChat(await reactHandler(model)(request({ mode: "chat", messages: [user("u1", "Ile euro dostanę za 1500 zł?")] })));
+  const calc = message.parts.find((p) => p.type === "tool-kalkulator");
+  check("Łańcuch: krok 2 dostał wynik kroku 1 (kurs 4,2512 z NBP)", rateSeen === 4.2512, String(rateSeen));
+  check("Łańcuch: kalkulator użył kursu z NBP (1500 / 4,2512)", JSON.stringify(calc?.input?.liczby) === "[1500,4.2512]" && calc?.output?.wynik === Math.round((1500 / 4.2512) * 1e10) / 1e10, JSON.stringify(calc?.output));
+  check("Łańcuch: lista kroków 1. waluty → 2. kalkulator", formatStepList(buildStepList(message)) === "1. waluty → 2. kalkulator");
+  check("Łańcuch: zakończony wcześniej (3 kroki), bez komunikatu o limicie", model.doStreamCalls.length === 3 && !textOf(message).includes("Zatrzymałem"));
+}
+{
+  // Test z materiałów 2: tymczasowy limit 2 kroków, porównanie pogody w czterech miastach.
+  const model = chatModel([
+    [call("p1", "pogoda", { miasto: "Londyn", data: "2026-11-13" }), toolCallsFinish],
+    [call("p2", "pogoda", { miasto: "Warszawa", data: "2026-11-13" }), toolCallsFinish],
+    [call("p3", "pogoda", { miasto: "Paryż", data: "2026-11-13" }), toolCallsFinish],
+  ]);
+  const { message } = await readChat(await reactHandler(model, { stepLimit: 2 })(request({ mode: "chat", messages: [user("u1", "Porównaj pogodę w Londynie, Warszawie, Paryżu i Berlinie")] })));
+  const text = textOf(message);
+  check("Limit 2: dokładnie 2 kroki", model.doStreamCalls.length === 2);
+  check("Limit 2: „Zatrzymałem się po 2 krokach” + 2 częściowe wyniki", text.startsWith("Zatrzymałem się po 2 krokach. Udało się ustalić:") && text.split("\n").filter((l) => l.startsWith("– pogoda (")).length === 2, text);
+  check("Limit 2: bez Paryża i Berlina (nie sprawdzone)", !text.includes("Paryż") && !text.includes("Berlin"));
+  // Przywrócenie limitu 6 (domyślnego) – ta sama prośba dochodzi dalej.
+  const model6 = chatModel([
+    [call("q1", "pogoda", { miasto: "Londyn", data: "2026-11-13" }), toolCallsFinish],
+    [call("q2", "pogoda", { miasto: "Warszawa", data: "2026-11-13" }), toolCallsFinish],
+    [call("q3", "pogoda", { miasto: "Paryż", data: "2026-11-13" }), toolCallsFinish],
+    [call("q4", "pogoda", { miasto: "Berlin", data: "2026-11-13" }), toolCallsFinish],
+    [...textChunks("Porównanie czterech miast gotowe."), stop],
+  ]);
+  const { message: m6 } = await readChat(await reactHandler(model6)(request({ mode: "chat", messages: [user("u1", "Porównaj pogodę w czterech miastach")] })));
+  check("Limit przywrócony (6): 5 kroków, zakończone bez komunikatu", model6.doStreamCalls.length === 5 && textOf(m6) === "Porównanie czterech miast gotowe.");
+}
+{
+  // Lista kroków: kilka narzędzi w jednym kroku, wyszukiwanie, Wikipedia, starsza odpowiedź.
+  const msg = { id: "m", role: "assistant", parts: [
+    { type: "step-start" }, { type: "tool-czas", toolCallId: "1", state: "output-available" },
+    { type: "step-start" }, { type: "tool-pogoda", toolCallId: "2", state: "output-available" }, { type: "tool-waluty", toolCallId: "3", state: "output-available" },
+    { type: "step-start" }, { type: "source-url", sourceId: "s1", url: "https://example.org" },
+    { type: "step-start" }, { type: "tool-wikipedia", toolCallId: "4", state: "output-available" }, { type: "source-url", sourceId: "wiki-4", url: "https://pl.wikipedia.org/wiki/X" },
+    { type: "step-start" }, { type: "text", text: "Odpowiedź" },
+  ] };
+  check("Lista: kilka narzędzi w kroku, wyszukiwanie, Wikipedia nie jako wyszukiwanie", formatStepList(buildStepList(msg)) === "1. czas → 2. pogoda, waluty → 3. wyszukiwanie → 4. wikipedia", formatStepList(buildStepList(msg)));
+  check("Lista: odpowiedź bez narzędzi → pusta", buildStepList({ id: "x", role: "assistant", parts: [{ type: "step-start" }, { type: "text", text: "Hej" }] }).length === 0);
+  check("Lista: starsza odpowiedź bez znaczników kroków", formatStepList(buildStepList({ id: "y", role: "assistant", parts: [{ type: "tool-czas", toolCallId: "1" }, { type: "text", text: "x" }] })) === "1. czas");
 }
 
 console.log("\n=== 12. Instrukcje ===");

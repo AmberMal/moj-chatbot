@@ -83,8 +83,8 @@ check("Nazwa pliku do pobrania", imageDownloadName(IMG, new Date(2026, 10, 11, 1
 check("Nazwa pliku JPG", imageDownloadName("data:image/jpeg;base64,AA", new Date(2026, 0, 2, 3, 4)) === "amber-obraz-2026-01-02-0304.jpg");
 
 console.log("\n=== Limit kroków i analiza JSON ===");
-check("finishReason „tool-calls” = limit 5 kroków", isStepLimit("tool-calls") && !isStepLimit("stop") && !isStepLimit(undefined));
-check("Komunikat o limicie po polsku", STEP_LIMIT_MESSAGE.includes("limit 5 kroków"));
+check("finishReason „tool-calls” = limit 6 kroków", isStepLimit("tool-calls") && !isStepLimit("stop") && !isStepLimit(undefined));
+check("Komunikat o limicie po polsku", STEP_LIMIT_MESSAGE.includes("limit 6 kroków"));
 {
   const ok = readAnalysisResponse({ analysis: { category: "sales", priority: "normal", draft: "Od £666", needs_review: false }, model: "google/gemini-3.8-flash" });
   check("Poprawny wynik analizy → 4 pola i model", ok?.analysis.category === "sales" && ok.model === "google/gemini-3.8-flash");

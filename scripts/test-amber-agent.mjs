@@ -293,7 +293,7 @@ console.log("\n=== 6. mode=chat: źródła, aktualnyCzas, sprawdzObszar, limit k
 {
   const loop = chatModel(() => [{ type: "tool-call", toolCallId: `c${Math.random()}`, toolName: "aktualnyCzas", input: "{}" }, toolCallsFinish]);
   await readChat(await handler({ model: loop }).handle(request({ mode: "chat", messages: [user("u1", "x")] })));
-  check("stopWhen: isStepCount(5) – najwyżej 5 kroków modelu", loop.doStreamCalls.length === 5, `${loop.doStreamCalls.length} kroków`);
+  check("stopWhen: isStepCount(6) – najwyżej 6 kroków modelu (lekcja 4)", loop.doStreamCalls.length === 6, `${loop.doStreamCalls.length} kroków`);
 }
 
 console.log("\n=== 7. mode=chat: błędy ===");
@@ -362,7 +362,7 @@ console.log("\n=== 8. Etap 3: przeglądarka (prepareAgentMessages) + /api/agent 
   const loop = chatModel(() => [{ type: "tool-call", toolCallId: `c${Math.random()}`, toolName: "aktualnyCzas", input: "{}" }, toolCallsFinish]);
   const { chunks, message } = await readChat(await handler({ model: loop }).handle(request({ mode: "chat", messages: [user("u1", "x")] })));
   const finish = chunks.find((c) => c.type === "finish");
-  check("Limit 5 kroków → finishReason „tool-calls” (przeglądarka pokaże komunikat)", isStepLimit(finish?.finishReason), finish?.finishReason);
+  check("Limit 6 kroków → finishReason „tool-calls”", isStepLimit(finish?.finishReason), finish?.finishReason);
   check("Odpowiedź zatrzymana limitem nadal jest podpisana", typeof message.metadata?.sig === "string");
   const next = await handler({ model: chatModel([[...textChunks("OK"), stop]]) }).handle(request({ mode: "chat", messages: prepareAgentMessages([user("u1", "x"), message, user("u2", "Dalej")]) }));
   check("Po odpowiedzi zatrzymanej limitem rozmowa działa dalej", next.status === 200);

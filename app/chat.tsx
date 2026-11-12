@@ -9,6 +9,8 @@ import {
   MAX_IMAGE_DESCRIPTION_CHARS,
   NO_IMAGE_MESSAGE,
   STEP_LIMIT_MESSAGE,
+  buildStepList,
+  formatStepList,
   buildImageRequest,
   hasImageToolPart,
   hasVisibleContent,
@@ -297,6 +299,9 @@ export default function Chat() {
           return (
             <Fragment key={message.id}>
             <div className={`message ${message.role}`}>
+              {message.role === "assistant" && buildStepList(message).length > 0 && (
+                <div className="agent-steps">Kroki: {formatStepList(buildStepList(message))}</div>
+              )}
               {message.role === "assistant" && toolLabels.length > 0 && (
                 <div className="tool-labels">
                   {toolLabels.map((label) => (
@@ -364,7 +369,9 @@ export default function Chat() {
               {message.role === "assistant" && noImageIds.includes(message.id) && (
                 <small className="image-error step-limit">{NO_IMAGE_MESSAGE}</small>
               )}
-              {message.role === "assistant" && stepLimitIds.includes(message.id) && (
+              {message.role === "assistant" &&
+                stepLimitIds.includes(message.id) &&
+                !message.parts.some((part) => part.type === "text" && part.text.trim().length > 0) && (
                 <small className="step-limit">⚠️ {STEP_LIMIT_MESSAGE}</small>
               )}
             </div>

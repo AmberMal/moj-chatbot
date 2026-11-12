@@ -4,8 +4,10 @@
 import type { UIMessage } from "ai";
 
 export const AGENT_API = "/api/agent";
+// Pokazywany tylko wtedy, gdy odpowiedź po limicie kroków nie ma tekstu (np. przerwana) –
+// zwykle podsumowanie „Zatrzymałem się po 6 krokach” dopisuje serwer.
 export const STEP_LIMIT_MESSAGE =
-  "Osiągnięto limit 5 kroków – odpowiedź może być niepełna. Spróbuj zadać pytanie prościej lub w kilku częściach.";
+  "Osiągnięto limit 6 kroków – odpowiedź może być niepełna. Spróbuj zadać pytanie prościej lub w kilku częściach.";
 
 const GENERATED_IMAGE_URL = /^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/]+={0,2}$/;
 
@@ -44,7 +46,7 @@ export function prepareAgentMessages(messages: UIMessage[]): UIMessage[] {
   });
 }
 
-// Limit kroków: model zakończył na wywołaniu narzędzia (stopWhen: isStepCount(5)).
+// Limit kroków: model zakończył na wywołaniu narzędzia (stopWhen: isStepCount(6)).
 export function isStepLimit(finishReason: string | undefined): boolean {
   return finishReason === "tool-calls";
 }
@@ -126,3 +128,45 @@ export function hasVisibleContent(message: UIMessage): boolean {
   );
 }
 
+
+// Lekcja 4, Warsztat 2 (ReAct): lista rzeczywiście wykonanych kroków z narzędziami, np. „1. czas → 2. pogoda, waluty”.
+// Numer = numer kroku modelu (znacznik „step-start”). Kroki bez narzędzi (samo pisanie odpowiedzi) nie są pokazywane.
+// Wyszukiwanie rozpoznajemy po źródłach z wyszukiwarki; źródło z Wikipedii (sourceId „wiki-…”) nie jest wyszukiwaniem.
+// Tylko do wyświetlania – nie wpływa na podpis ani historię.
+export type AgentStep = { nr: number; tools: string[] };
+
+export function buildStepList(message: UIMessage): AgentStep[] {
+  const steps: AgentStep[] = [];
+  let nr = 0;
+  let current: AgentStep | null = null;
+  const add = (name: string) => {
+    if (nr === 0) nr = 1; // starsza odpowiedź bez znaczników kroków
+    if (!current || current.nr !== nr) {
+      current = { nr, tools: [] };
+      steps.push(current);
+    }
+    if (!current.tools.includes(name)) current.tools.push(name);
+  };
+  for (const part of message.parts) {
+    if (part.type === "step-start") {
+      nr++;
+      continue;
+    }
+    if (part.type === "source-url") {
+      const id = (part as { sourceId?: unknown }).sourceId;
+      if (!(typeof id === "string" && id.startsWith("wiki-"))) add("wyszukiwanie");
+      continue;
+    }
+    if (part.type.startsWith("tool-")) {
+      const raw = part.type.slice(5);
+      const name = raw === "web_search" ? "wyszukiwanie" : raw;
+      const state = (part as { state?: unknown }).state;
+      add(state === "output-error" ? `${name} (błąd)` : name);
+    }
+  }
+  return steps;
+}
+
+export function formatStepList(steps: AgentStep[]): string {
+  return steps.map((s) => `${s.nr}. ${s.tools.join(", ")}`).join(" → ");
+}
