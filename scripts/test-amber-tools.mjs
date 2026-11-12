@@ -145,6 +145,45 @@ const EUR = { table: "A", currency: "euro", code: "EUR", rates: [{ no: "220/A/NB
   check("Nieznana waluta (404 w A i B) → komunikat po polsku", !none.ok && none.komunikat.includes("NBP nie publikuje kursu waluty „XYZ”"), none.komunikat);
   const down = await getCurrency({ waluta: "EUR" }, { fetch: fakeFetch([["nbp", status(503)]]), now });
   check("NBP nie odpowiada → komunikat", !down.ok && down.komunikat === "Serwis NBP nie odpowiada. Spróbuj ponownie za chwilę.");
+  // Poprawka: tabela B tylko po 404 z tabeli A; inne błędy bez przejścia do B; kursy starsze niż 14 dni odrzucane.
+  const USD_A = { table: "A", currency: "dolar amerykański", code: "USD", rates: [{ effectiveDate: "2026-11-12", mid: 3.9676 }] };
+  const USD_B_OLD = { table: "B", currency: "dolar", code: "USD", rates: [{ effectiveDate: "2004-04-28", mid: 4.011 }] };
+  {
+    const f = fakeFetch([["/rates/A/USD/", USD_A], ["/rates/B/USD/", USD_B_OLD]]);
+    const r = await getCurrency({ waluta: "USD" }, { fetch: f, now });
+    check("Tabela A odpowiada → kurs z tabeli A, bez zapytania do B", r.ok && r.tabela === "A" && r.kursPLN === 3.9676 && f.calls.length === 1, JSON.stringify(r));
+  }
+  for (const [name, reply] of [["HTTP 500", status(500)], ["HTTP 503", status(503)], ["HTTP 429", status(429)], ["brak sieci", networkDown], ["zły JSON", new Response("<html>", { status: 200 })], ["timeout", neverAnswers]]) {
+    const f = fakeFetch([["/rates/A/USD/", reply], ["/rates/B/USD/", USD_B_OLD]]);
+    const r = await getCurrency({ waluta: "USD" }, { fetch: f, now, timeoutMs: 30 });
+    check(`Tabela A: ${name} → „NBP nie odpowiada”, BEZ przejścia do tabeli B`, !r.ok && r.komunikat === "Serwis NBP nie odpowiada. Spróbuj ponownie za chwilę." && f.calls.length === 1 && !f.calls.some((c) => c.url.includes("/rates/B/")), `${f.calls.length} zapytań`);
+  }
+  {
+    const f = fakeFetch([["/rates/A/USD/", { table: "A", code: "USD", rates: [] }], ["/rates/B/USD/", USD_B_OLD]]);
+    const r = await getCurrency({ waluta: "USD" }, { fetch: f, now });
+    check("Tabela A: odpowiedź bez kursu → „NBP nie odpowiada”, bez tabeli B", !r.ok && r.komunikat.includes("NBP nie odpowiada") && f.calls.length === 1);
+  }
+  {
+    const f = fakeFetch([["/rates/B/AFN/", { table: "B", currency: "afgani", code: "AFN", rates: [{ effectiveDate: "2026-11-11", mid: 0.0551 }] }]]);
+    const r = await getCurrency({ waluta: "AFN" }, { fetch: f, now });
+    check("Tabela A 404 → tabela B (aktualny kurs przyjęty)", r.ok && r.tabela === "B" && f.calls.length === 2 && f.calls[0].url.includes("/rates/A/") && f.calls[1].url.includes("/rates/B/"));
+    const f2 = fakeFetch([["/rates/B/AFN/", status(500)]]);
+    const r2 = await getCurrency({ waluta: "AFN" }, { fetch: f2, now });
+    check("Tabela A 404, tabela B błąd → „NBP nie odpowiada”", !r2.ok && r2.komunikat.includes("NBP nie odpowiada"));
+  }
+  {
+    const f = fakeFetch([["/rates/B/USD/", USD_B_OLD]]);
+    const r = await getCurrency({ waluta: "USD" }, { fetch: f, now });
+    check("Kurs starszy niż 14 dni (2004-04-28) → odrzucony z komunikatem po polsku", !r.ok && r.komunikat === "Najnowszy kurs waluty „USD” w NBP pochodzi z 2004-04-28 (starszy niż 14 dni), więc nie podaję go jako aktualnego.", r.komunikat);
+    const old15 = fakeFetch([["/rates/A/EUR/", { ...EUR, rates: [{ effectiveDate: "2026-10-28", mid: 4.3 }] }]]);
+    check("Kurs sprzed 15 dni → odrzucony", !(await getCurrency({ waluta: "EUR" }, { fetch: old15, now })).ok);
+    const ok14 = fakeFetch([["/rates/A/EUR/", { ...EUR, rates: [{ effectiveDate: "2026-10-29", mid: 4.3 }] }]]);
+    check("Kurs sprzed dokładnie 14 dni → przyjęty", (await getCurrency({ waluta: "EUR" }, { fetch: ok14, now })).ok === true);
+    const badDate = fakeFetch([["/rates/A/EUR/", { ...EUR, rates: [{ effectiveDate: "wczoraj", mid: 4.3 }] }]]);
+    check("Zła data kursu → „NBP nie odpowiada”", !(await getCurrency({ waluta: "EUR" }, { fetch: badDate, now })).ok);
+    const badMid = fakeFetch([["/rates/A/EUR/", { ...EUR, rates: [{ effectiveDate: "2026-11-12", mid: -1 }] }]]);
+    check("Ujemny kurs → „NBP nie odpowiada”", !(await getCurrency({ waluta: "EUR" }, { fetch: badMid, now })).ok);
+  }
   const pln = await getCurrency({ waluta: "PLN" }, { fetch: fakeFetch([]), now });
   check("PLN → komunikat (waluta bazowa), bez zapytania", !pln.ok && pln.komunikat.includes("waluta bazowa"));
 }

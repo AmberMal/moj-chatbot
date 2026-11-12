@@ -209,37 +209,52 @@ export type CurrencyResult =
     }
   | ApiFailure;
 
+// Kurs starszy niż tyle dni nie jest podawany jako aktualny (tabela B NBP wychodzi raz w tygodniu).
+export const MAX_RATE_AGE_DAYS = 14;
+
+// Tabela A NBP; tabela B TYLKO gdy tabela A odpowie 404 (brak waluty w tabeli A).
+// Każdy inny błąd tabeli A = serwis NBP niedostępny (bez przechodzenia do tabeli B).
 export async function getCurrency({ waluta, kwota }: CurrencyInput, options: ApiOptions = {}): Promise<CurrencyResult> {
   const code = waluta.toUpperCase();
   if (code === "PLN") return fail("Złoty (PLN) to waluta bazowa – kurs wynosi 1.", options);
-  let anyError = false;
-  for (const table of ["A", "B"] as const) {
-    const res = await getJson(`https://api.nbp.pl/api/exchangerates/rates/${table}/${code}/?format=json`, options);
-    if (res.status === "error") {
-      anyError = true;
-      continue;
-    }
-    if (res.status === "notFound") continue;
-    const d = res.data;
-    const rate = isObject(d) && Array.isArray(d.rates) ? d.rates[0] : undefined;
-    if (!isObject(d) || !isObject(rate) || typeof rate.mid !== "number") {
-      anyError = true;
-      continue;
-    }
-    return {
-      ok: true,
-      waluta: typeof d.currency === "string" ? d.currency : code,
-      kod: typeof d.code === "string" ? d.code : code,
-      kursPLN: rate.mid,
-      dataKursu: typeof rate.effectiveDate === "string" ? rate.effectiveDate : "",
-      tabela: table,
-      ...(kwota !== undefined ? { kwota, kwotaPLN: Math.round(kwota * rate.mid * 100) / 100 } : {}),
-      zrodlo: "NBP",
-      pobrano: nowLabel(options),
-    };
+  const url = (table: "A" | "B") => `https://api.nbp.pl/api/exchangerates/rates/${table}/${code}/?format=json`;
+  let table: "A" | "B" = "A";
+  let res = await getJson(url("A"), options);
+  if (res.status === "notFound") {
+    table = "B";
+    res = await getJson(url("B"), options);
   }
-  if (anyError) return fail(UNAVAILABLE("NBP"), options);
-  return fail(`NBP nie publikuje kursu waluty „${code}”. Podaj trzyliterowy kod, np. EUR, USD, GBP.`, options);
+  if (res.status === "notFound") {
+    return fail(`NBP nie publikuje kursu waluty „${code}”. Podaj trzyliterowy kod, np. EUR, USD, GBP.`, options);
+  }
+  if (res.status === "error") return fail(UNAVAILABLE("NBP"), options);
+  const d = res.data;
+  const rate = isObject(d) && Array.isArray(d.rates) ? d.rates[0] : undefined;
+  if (!isObject(d) || !isObject(rate) || typeof rate.mid !== "number" || !Number.isFinite(rate.mid) || rate.mid <= 0) {
+    return fail(UNAVAILABLE("NBP"), options);
+  }
+  const effectiveDate = typeof rate.effectiveDate === "string" ? rate.effectiveDate : "";
+  if (!isRealDate(effectiveDate)) return fail(UNAVAILABLE("NBP"), options);
+  const nowDate = (options.now ?? (() => new Date()))();
+  const ageDays = (Date.parse(isoDateIn("Europe/Warsaw", nowDate)) - Date.parse(effectiveDate)) / 86_400_000;
+  if (ageDays > MAX_RATE_AGE_DAYS) {
+    return fail(
+      `Najnowszy kurs waluty „${code}” w NBP pochodzi z ${effectiveDate} (starszy niż ${MAX_RATE_AGE_DAYS} dni), ` +
+        "więc nie podaję go jako aktualnego.",
+      options,
+    );
+  }
+  return {
+    ok: true,
+    waluta: typeof d.currency === "string" ? d.currency : code,
+    kod: typeof d.code === "string" ? d.code : code,
+    kursPLN: rate.mid,
+    dataKursu: effectiveDate,
+    tabela: table,
+    ...(kwota !== undefined ? { kwota, kwotaPLN: Math.round(kwota * rate.mid * 100) / 100 } : {}),
+    zrodlo: "NBP",
+    pobrano: nowLabel(options),
+  };
 }
 
 export function createCurrencyTool(options: ApiOptions = {}) {
