@@ -122,7 +122,7 @@ export function deviceInfo(input: string): DeviceInfo {
   }
   return { producent, obslugiwanaMarka: null,
     komunikat: "Firma może serwisować większość istniejących systemów, także starszych – zależy to od producenta, modelu i stanu urządzenia. " +
-      "Poproś o model urządzenia lub zdjęcie na WhatsApp: 123 456 78900." };
+      "Poproś o model urządzenia lub zdjęcie – przez WhatsApp na numer 123 456 78900 (w czacie także przyciskiem „Dodaj zdjęcie”)." };
 }
 
 export const informacjeOUrzadzeniu = tool({
