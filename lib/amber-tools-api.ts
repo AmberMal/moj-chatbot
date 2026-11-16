@@ -101,7 +101,18 @@ export type WeatherResult =
     }
   | ApiFailure;
 
-export async function getWeather({ miasto, data }: WeatherInput, options: ApiOptions = {}): Promise<WeatherResult> {
+// Geokodowanie nazwy miasta (Open-Meteo) – jedno zapytanie. Używa go narzędzie pogoda i Dashboard (lekcja 4, W3).
+export type GeoPlace = {
+  name: string;
+  latitude: number;
+  longitude: number;
+  country: string;
+  countryCode: string;
+  timezone: string;
+};
+export type GeocodeResult = { ok: true; place: GeoPlace } | ApiFailure;
+
+export async function geocodeCity(miasto: string, options: ApiOptions = {}): Promise<GeocodeResult> {
   const geoUrl =
     "https://geocoding-api.open-meteo.com/v1/search?" +
     new URLSearchParams({ name: miasto, count: "1", language: "pl", format: "json" }).toString();
@@ -111,7 +122,34 @@ export async function getWeather({ miasto, data }: WeatherInput, options: ApiOpt
   if (!isObject(place) || typeof place.latitude !== "number" || typeof place.longitude !== "number") {
     return fail(`Nie znalazłam miasta „${miasto}”. Sprawdź pisownię albo podaj większe miasto w pobliżu.`, options);
   }
-  const timeZone = typeof place.timezone === "string" ? place.timezone : "UTC";
+  return {
+    ok: true,
+    place: {
+      name: typeof place.name === "string" ? place.name : miasto,
+      latitude: place.latitude,
+      longitude: place.longitude,
+      country: typeof place.country === "string" ? place.country : "",
+      countryCode: typeof place.country_code === "string" ? place.country_code.toUpperCase() : "",
+      timezone: typeof place.timezone === "string" ? place.timezone : "UTC",
+    },
+  };
+}
+
+// place – opcjonalnie wynik geocodeCity (Dashboard), żeby nie geokodować drugi raz. Bez niego – jak dotąd.
+export async function getWeather(
+  { miasto, data }: WeatherInput,
+  options: ApiOptions = {},
+  knownPlace?: GeoPlace,
+): Promise<WeatherResult> {
+  let place: GeoPlace;
+  if (knownPlace) {
+    place = knownPlace;
+  } else {
+    const geo = await geocodeCity(miasto, options);
+    if (!geo.ok) return geo;
+    place = geo.place;
+  }
+  const timeZone = place.timezone;
   const day = data ?? isoDateIn(timeZone, (options.now ?? (() => new Date()))());
 
   const forecastUrl =
@@ -146,8 +184,8 @@ export async function getWeather({ miasto, data }: WeatherInput, options: ApiOpt
   if (typeof max !== "number" || typeof min !== "number") return fail(`Prognoza na ${day} jest niedostępna.`, options);
   return {
     ok: true,
-    miasto: typeof place.name === "string" ? place.name : miasto,
-    kraj: typeof place.country === "string" ? place.country : "",
+    miasto: place.name,
+    kraj: place.country,
     data: day,
     temperaturaMinC: min,
     temperaturaMaxC: max,

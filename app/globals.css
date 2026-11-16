@@ -68,3 +68,25 @@ h1 { margin: 0; }
 .generating { display: block; color: #777; font-style: italic; }
 .analysis-json { margin: 0; padding: 10px; border-radius: 6px; background: #fff; border: 1px solid #ddd; font-size: 13px; white-space: pre-wrap; word-break: break-word; }
 .step-limit { display: block; margin-top: 6px; font-size: 12px; color: #8a5a00; white-space: normal; }
+
+/* Lekcja 4, Warsztat 3: Dashboard podróży */
+.toolbar { gap: 8px; }
+.toolbar a.logout { text-decoration: none; }
+.page-nav a { color: #1a4fa0; text-decoration: none; font-size: 14px; }
+.trip-form { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; }
+.trip-form label { display: flex; flex-direction: column; gap: 4px; font-weight: 600; font-size: 14px; flex: 1; min-width: 160px; }
+.trip-form input { padding: 10px; border: 1px solid #ccc; border-radius: 6px; font-size: 16px; font-weight: 400; }
+.trip-form button { padding: 10px 18px; border: 0; border-radius: 6px; background: #222; color: #fff; font-size: 16px; cursor: pointer; }
+.trip-form button:disabled { opacity: 0.5; cursor: not-allowed; }
+.trip-header { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.trip-header h2 { margin: 0; font-size: 18px; }
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px; margin-top: 10px; }
+.card { background: #fff; border: 1px solid #ddd; border-radius: 8px; padding: 12px; display: flex; flex-direction: column; gap: 6px; }
+.card h3 { margin: 0; font-size: 14px; color: #555; }
+.card-value { margin: 0; font-size: 18px; font-weight: 600; }
+.card-details { margin: 0; font-size: 14px; white-space: pre-wrap; }
+.card a { color: #1a4fa0; font-size: 14px; }
+.card small { color: #777; font-size: 12px; margin-top: auto; }
+.card-error { border-color: #e0a0a0; background: #fdf6f6; }
+.trip-summary { margin-top: 12px; background: #fff; border: 1px solid #ddd; border-radius: 8px; padding: 12px; }
+.trip-summary p { margin: 6px 0 0; line-height: 1.45; }

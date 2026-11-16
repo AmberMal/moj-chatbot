@@ -1,6 +1,7 @@
 "use client";
 
 import { useChat } from "@ai-sdk/react";
+import Link from "next/link";
 import { DefaultChatTransport, type UIMessage } from "ai";
 import { useRouter } from "next/navigation";
 import { Fragment, useRef, useState, type ChangeEvent, type FormEvent } from "react";
@@ -268,6 +269,10 @@ export default function Chat() {
   return (
     <>
       <div className="toolbar">
+        {/* Lekcja 4, Warsztat 3: link do Dashboardu podróży */}
+        <Link href="/dashboard" className="logout">
+          Dashboard podróży
+        </Link>
         <button type="button" className="logout" onClick={handleLogout}>
           Wyjdź
         </button>
