@@ -2,13 +2,17 @@
 // Ten plik działa tylko na serwerze. Dane pobierają ISTNIEJĄCE funkcje narzędzi agenta (lib/amber-tools-api.ts,
 // lib/amber-tools-local.ts) – są przekazywane z zewnątrz (app/api/dashboard/route.ts), tak jak w createAgentHandler,
 // żeby logikę dało się przetestować bez internetu i bez modelu (scripts/test-amber-dashboard.mjs).
-// Komunikaty błędów zwrócone przez funkcje narzędzi karta pokazuje bez zmian (dodatkowa odporność – poziom Standard).
+// Poziom Standard: każda karta ma stan „OK” albo „Brak danych” („Ładuję…” pokazuje przeglądarka w czasie pobierania).
+// Gdy jedno źródło zawiedzie, pozostałe karty działają; nigdy nie wstawiamy danych zastępczych ani wymyślonych.
+// Podsumowanie agenta musi wprost wskazać brakujące źródło (sprawdza to serwer).
 
 export type CardId = "pogoda" | "waluty" | "swieta" | "wikipedia" | "czas";
+export type CardState = "ok" | "brak_danych";
 export type DashboardCard = {
   id: CardId;
   tytul: string;
   ok: boolean;
+  stan: CardState; // Standard: „OK” / „Brak danych”
   wartosc: string; // główna wartość (gdy ok)
   jednostka?: string;
   szczegoly?: string;
@@ -56,7 +60,9 @@ export type DashboardDeps = {
   hasSession: (req: Request) => boolean;
   sources: DashboardSources;
   // Podsumowanie agenta: dane kart → 2–3 zdania. null = brak konfiguracji modelu.
-  summarize: ((input: { miasto: string; kraj: string; data: string; karty: unknown[] }) => Promise<string>) | null;
+  summarize:
+    | ((input: { miasto: string; kraj: string; data: string; karty: unknown[]; brakujaceZrodla: string[] }) => Promise<string>)
+    | null;
   now?: () => Date;
   log?: (message: string) => void;
 };
@@ -145,6 +151,72 @@ function holidayScope(h: Holiday): string {
 }
 const dmy = (iso: string) => `${iso.slice(8, 10)}.${iso.slice(5, 7)}.${iso.slice(0, 4)}`;
 
+type RawCard = Omit<DashboardCard, "stan">;
+
+// Opis kart: tytuł, nazwa źródła i słowa, po których rozpoznajemy, że podsumowanie wspomina o tej karcie.
+export const CARD_META: Record<CardId, { tytul: string; zrodlo: string; slowa: string[] }> = {
+  pogoda: { tytul: "Pogoda", zrodlo: "Open-Meteo", slowa: ["pogod", "prognoz", "open-meteo"] },
+  waluty: { tytul: "Waluty", zrodlo: "NBP", slowa: ["walut", "waluc", "kurs", "nbp"] },
+  swieta: { tytul: "Święta", zrodlo: "Nager.Date", slowa: ["święt", "świąt", "swiet", "swiat", "dni woln", "nager"] },
+  wikipedia: { tytul: "Wikipedia", zrodlo: "Wikipedia (pl)", slowa: ["wikipedi"] },
+  czas: { tytul: "Czas", zrodlo: "zegar serwera", slowa: ["czas", "godzin", "stref"] },
+};
+const CARD_ORDER: CardId[] = ["pogoda", "waluty", "swieta", "wikipedia", "czas"];
+
+// Karta „Brak danych” – bez żadnych danych zastępczych; komunikat = przyczyna (z narzędzia albo wyjątku).
+export function missingCard(id: CardId, komunikat: string, now: Date, zrodlo?: string): DashboardCard {
+  return {
+    id,
+    tytul: CARD_META[id].tytul,
+    ok: false,
+    stan: "brak_danych",
+    wartosc: "",
+    komunikat,
+    zrodlo: zrodlo ?? CARD_META[id].zrodlo,
+    pobrano: fetchedLabel(now),
+  };
+}
+
+// Nazwy brakujących źródeł, np. „Waluty (NBP)”.
+export function missingSources(karty: DashboardCard[]): string[] {
+  return karty.filter((k) => k.stan === "brak_danych").map((k) => `${CARD_META[k.id].tytul} (${CARD_META[k.id].zrodlo})`);
+}
+
+// Czy podsumowanie wprost wymienia każdą kartę bez danych (po nazwie karty albo źródła).
+export function summaryNamesMissing(text: string, karty: DashboardCard[]): boolean {
+  const lower = text.toLowerCase();
+  return karty
+    .filter((k) => k.stan === "brak_danych")
+    .every((k) => CARD_META[k.id].slowa.some((w) => lower.includes(w)));
+}
+
+async function wikipediaCard(haslo: string, sources: DashboardSources): Promise<DashboardCard> {
+  const r = await sources.getWikipedia({ haslo });
+  const base = { id: "wikipedia" as const, tytul: "Wikipedia", zrodlo: "Wikipedia (pl)", pobrano: r.pobrano };
+  if (!r.ok) return { ...base, ok: false, stan: "brak_danych", wartosc: "", komunikat: r.komunikat };
+  return { ...base, ok: true, stan: "ok", wartosc: r.tytul, szczegoly: firstSentences(r.streszczenie, 2), link: r.link, zrodlo: r.zrodlo };
+}
+
+// Każda karta osobno: wyjątek w jednej karcie daje tylko tej karcie „Brak danych”.
+function isolate(id: CardId, card: Promise<DashboardCard>, now: Date): Promise<DashboardCard> {
+  return card
+    .then((c) => ({ ...c, stan: (c.ok ? "ok" : "brak_danych") as CardState }))
+    .catch((error) => {
+      const details = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+      console.error(`[Amber] /api/dashboard – błąd karty ${id}: ${details.slice(0, 300)}`);
+      return missingCard(id, "Źródło nie zwróciło danych.", now);
+    });
+}
+
+// Geokodowanie niedostępne: bez kraju i strefy czasowej działa tylko Wikipedia (po nazwie miasta); reszta – „Brak danych”.
+export async function buildCardsWithoutPlace(miasto: string, komunikat: string, sources: DashboardSources, now: Date): Promise<DashboardCard[]> {
+  return Promise.all(
+    CARD_ORDER.map((id) =>
+      id === "wikipedia" ? isolate(id, wikipediaCard(miasto, sources), now) : Promise.resolve(missingCard(id, komunikat, now, id === "czas" ? "zegar serwera (strefa z Open-Meteo)" : undefined)),
+    ),
+  );
+}
+
 // 5 kart dla jednego miasta (geokodowanie wykonane wcześniej – dokładnie raz).
 export async function buildCityCards(
   place: Place,
@@ -152,7 +224,7 @@ export async function buildCityCards(
   sources: DashboardSources,
   now: Date,
 ): Promise<DashboardCard[]> {
-  const pogoda = (async (): Promise<DashboardCard> => {
+  const pogoda = (async (): Promise<RawCard> => {
     const r = await sources.getWeather({ miasto: place.name, data }, place);
     const base = { id: "pogoda" as const, tytul: "Pogoda", zrodlo: "Open-Meteo", pobrano: r.pobrano };
     if (!r.ok) return { ...base, ok: false, wartosc: "", komunikat: r.komunikat };
@@ -166,7 +238,7 @@ export async function buildCityCards(
     };
   })();
 
-  const waluty = (async (): Promise<DashboardCard> => {
+  const waluty = (async (): Promise<RawCard> => {
     const code = place.countryCode;
     if (code === "PL") {
       return { id: "waluty", tytul: "Waluty", ok: true, wartosc: "złoty (PLN)", szczegoly: "waluta lokalna – przeliczenie niepotrzebne", zrodlo: "NBP (waluta bazowa)", pobrano: fetchedLabel(now) };
@@ -181,7 +253,7 @@ export async function buildCityCards(
     return { ...base, ok: true, wartosc: `1 ${r.kod} = ${plNum(r.kursPLN)}`, jednostka: "zł", szczegoly: `kurs średni NBP z ${dmy(r.dataKursu)}`, zrodlo: r.zrodlo };
   })();
 
-  const swieta = (async (): Promise<DashboardCard> => {
+  const swieta = (async (): Promise<RawCard> => {
     const rok = Number(data.slice(0, 4));
     const first = await sources.getHolidays({ kraj: place.countryCode, rok });
     const base = { id: "swieta" as const, tytul: "Święta", zrodlo: "Nager.Date", pobrano: first.pobrano };
@@ -202,14 +274,9 @@ export async function buildCityCards(
     };
   })();
 
-  const wikipedia = (async (): Promise<DashboardCard> => {
-    const r = await sources.getWikipedia({ haslo: place.name });
-    const base = { id: "wikipedia" as const, tytul: "Wikipedia", zrodlo: "Wikipedia (pl)", pobrano: r.pobrano };
-    if (!r.ok) return { ...base, ok: false, wartosc: "", komunikat: r.komunikat };
-    return { ...base, ok: true, wartosc: r.tytul, szczegoly: firstSentences(r.streszczenie, 2), link: r.link, zrodlo: r.zrodlo };
-  })();
+  const wikipedia = wikipediaCard(place.name, sources);
 
-  const czas = (async (): Promise<DashboardCard> => {
+  const czas = (async (): Promise<RawCard> => {
     const r = sources.timeIn(place.timezone, now);
     const base = { id: "czas" as const, tytul: "Czas", zrodlo: `zegar serwera, strefa ${place.timezone}`, pobrano: r.pobrano };
     if (!r.ok) return { ...base, ok: false, wartosc: "", komunikat: r.komunikat };
@@ -221,7 +288,14 @@ export async function buildCityCards(
     };
   })();
 
-  return Promise.all([pogoda, waluty, swieta, wikipedia, czas]);
+  const asCard = (p: Promise<RawCard | DashboardCard>) => p.then((c) => ({ ...c, stan: (c.ok ? "ok" : "brak_danych") as CardState }));
+  return Promise.all([
+    isolate("pogoda", asCard(pogoda), now),
+    isolate("waluty", asCard(waluty), now),
+    isolate("swieta", asCard(swieta), now),
+    isolate("wikipedia", wikipedia, now),
+    isolate("czas", asCard(czas), now),
+  ]);
 }
 
 // Dane kart dla modelu – tylko treść kart (bez linków i identyfikatorów technicznych).
@@ -229,7 +303,7 @@ export function cardsForModel(karty: DashboardCard[]): unknown[] {
   return karty.map((k) =>
     k.ok
       ? { karta: k.tytul, wartosc: [k.wartosc, k.jednostka].filter(Boolean).join(" "), szczegoly: k.szczegoly ?? "", zrodlo: k.zrodlo, pobrano: k.pobrano }
-      : { karta: k.tytul, blad: k.komunikat ?? "", zrodlo: k.zrodlo, pobrano: k.pobrano },
+      : { karta: k.tytul, stan: "brak danych", zrodlo: CARD_META[k.id].zrodlo, przyczyna: k.komunikat ?? "", pobrano: k.pobrano },
   );
 }
 
@@ -257,29 +331,51 @@ export function createDashboardHandler(deps: DashboardDeps) {
     if (!isRealDate(data)) return json({ error: DASHBOARD_MESSAGES.badDate }, 400);
 
     // 3. Geokodowanie miasta – dokładnie raz (wynik używają karty Pogoda, Waluty, Święta, Wikipedia i Czas).
-    const geo = await deps.sources.geocodeCity(miasto);
-    if (!geo.ok) return json({ error: geo.komunikat }, 400);
-    const place = geo.place;
-
-    // 4. Pięć kart (istniejące funkcje narzędzi).
+    //    Nieznane miasto → 400 (jak w Minimum). Geokodowanie niedostępne → karty bez danych (oprócz Wikipedii), status 200.
     const at = now();
-    const karty = await buildCityCards(place, data, deps.sources, at);
+    let geo: Awaited<ReturnType<DashboardSources["geocodeCity"]>>;
+    try {
+      geo = await deps.sources.geocodeCity(miasto);
+    } catch {
+      geo = { ok: false, komunikat: "Serwis pogodowy Open-Meteo nie odpowiada. Spróbuj ponownie za chwilę.", pobrano: fetchedLabel(at) };
+    }
+    if (!geo.ok && geo.komunikat.startsWith("Nie znalazłam miasta")) return json({ error: geo.komunikat }, 400);
+
+    // 4. Pięć kart (istniejące funkcje narzędzi), każda niezależnie.
+    const place = geo.ok ? geo.place : null;
+    const karty = place
+      ? await buildCityCards(place, data, deps.sources, at)
+      : await buildCardsWithoutPlace(miasto, geo.ok ? "" : geo.komunikat, deps.sources, at);
+    const brakujaceZrodla = missingSources(karty);
 
     // 5. Podsumowanie agenta – tylko na podstawie kart. Przy problemie: „Podsumowanie niedostępne”, karty zostają.
     let podsumowanie: string | null = null;
     if (deps.summarize) {
       try {
-        const text = (await deps.summarize({ miasto: place.name, kraj: place.country, data, karty: cardsForModel(karty) })).trim();
+        const text = (
+          await deps.summarize({
+            miasto: place?.name ?? miasto,
+            kraj: place?.country ?? "",
+            data,
+            karty: cardsForModel(karty),
+            brakujaceZrodla,
+          })
+        ).trim();
         const sentences = countSentences(text);
+        const namesMissing = summaryNamesMissing(text, karty);
         if (
           text.length > 0 &&
           text.length <= MAX_SUMMARY_CHARS &&
           sentences >= MIN_SUMMARY_SENTENCES &&
-          sentences <= MAX_SUMMARY_SENTENCES
+          sentences <= MAX_SUMMARY_SENTENCES &&
+          namesMissing
         ) {
           podsumowanie = text;
         } else {
-          log(`[Amber] /api/dashboard – podsumowanie odrzucone (długość ${text.length}, zdań: ${sentences}).`);
+          log(
+            `[Amber] /api/dashboard – podsumowanie odrzucone (długość ${text.length}, zdań: ${sentences}, ` +
+              `brakujące źródła wymienione: ${namesMissing ? "tak" : "nie"}).`,
+          );
         }
       } catch (error) {
         const details = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
@@ -287,7 +383,7 @@ export function createDashboardHandler(deps: DashboardDeps) {
       }
     }
 
-    const result: DashboardResult = { miasto: place.name, kraj: place.country, data, karty, podsumowanie };
+    const result: DashboardResult = { miasto: place?.name ?? miasto, kraj: place?.country ?? "", data, karty, podsumowanie };
     return json(result);
   };
 }

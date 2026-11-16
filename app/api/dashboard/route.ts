@@ -38,7 +38,10 @@ export async function POST(req: Request) {
           messages: [
             {
               role: "user",
-              content: `Miasto: ${input.miasto} (${input.kraj}), data podróży: ${input.data}.\nDane z kart (JSON):\n${JSON.stringify(input.karty)}`,
+              content:
+                `Miasto: ${input.miasto}${input.kraj ? ` (${input.kraj})` : ""}, data podróży: ${input.data}.\n` +
+                `Brak danych z: ${input.brakujaceZrodla.length > 0 ? input.brakujaceZrodla.join(", ") : "—"}.\n` +
+                `Dane z kart (JSON):\n${JSON.stringify(input.karty)}`,
             },
           ],
           abortSignal: req.signal,

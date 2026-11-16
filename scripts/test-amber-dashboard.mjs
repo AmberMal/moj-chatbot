@@ -10,12 +10,16 @@ import {
   MAX_SUMMARY_CHARS,
   countSentences,
   createDashboardHandler,
+  missingSources,
+  summaryNamesMissing,
   differenceFromPoland,
   firstSentences,
 } from "../lib/amber-dashboard.ts";
 import { geocodeCity, getCurrency, getHolidays, getWeather, getWikipedia } from "../lib/amber-tools-api.ts";
 import { timeIn } from "../lib/amber-tools-local.ts";
 import { AMBER_CHAT_INSTRUCTIONS, AMBER_DASHBOARD_INSTRUCTIONS } from "../lib/amber-instructions.ts";
+const neverAnswers = (_url, init) => new Promise((_, reject) => init.signal.addEventListener("abort", () => reject(new Error("aborted"))));
+const networkDown = () => Promise.reject(new TypeError("fetch failed"));
 
 let passed = 0;
 let failed = 0;
@@ -293,6 +297,108 @@ console.log("\n=== 13. Pliki: strona, endpoint, linki ===");
   check("Formularz: „Dokąd jedziesz?”, „Kiedy?”, „Sprawdź”, „Odśwież”", ["Dokąd jedziesz?", "Kiedy?", '"Sprawdź"', '"Odśwież"'].every((t) => ui.includes(t)));
   check("„Podsumowanie niedostępne” przy braku podsumowania", ui.includes('result.podsumowanie ?? "Podsumowanie niedostępne"'));
   check("Minimum: bez trybu porównania", !/porown|Porównaj/i.test(ui + route));
+}
+
+console.log("\n=== 14. STANDARD: stany kart i awaria jednego źródła ===");
+{
+  const { handle } = handler();
+  const b = await (await handle(request({ miasto: "Londyn", data: "2026-11-17" }))).json();
+  check("Wszystkie źródła działają → 5 × stan „ok”", b.karty.every((k) => k.stan === "ok" && k.ok));
+}
+const SOURCE_OUTAGES = [
+  ["pogoda", "Open-Meteo (prognoza)", "api.open-meteo.com/v1/forecast"],
+  ["waluty", "NBP", "api.nbp.pl"],
+  ["swieta", "Nager.Date", "date.nager.at"],
+  ["wikipedia", "Wikipedia", "pl.wikipedia.org"],
+];
+for (const [id, name, host] of SOURCE_OUTAGES) {
+  for (const [kind, reply] of [["HTTP 503", status(503)], ["brak sieci", networkDown], ["timeout", neverAnswers]]) {
+    const f = londonFetch([[host, reply]]);
+    const o = { fetch: f, now, timeoutMs: 30 };
+    const h = createDashboardHandler({
+      hasSession: () => true,
+      sources: {
+        geocodeCity: (m) => geocodeCity(m, o), getWeather: (i, p) => getWeather(i, o, p), getCurrency: (i) => getCurrency(i, o),
+        getHolidays: (i) => getHolidays(i, o), getWikipedia: (i) => getWikipedia(i, o), timeIn: (z, at) => timeIn(z, at),
+      },
+      summarize: null, now, log: () => {},
+    });
+    const r = await h(request({ miasto: "Londyn", data: "2026-11-17" }));
+    const b = await r.json();
+    const bad = b.karty.find((k) => k.id === id);
+    const others = b.karty.filter((k) => k.id !== id);
+    check(`${name} – ${kind}: ta karta „brak_danych”, pozostałe 4 „ok”, status 200`, r.status === 200 && bad.stan === "brak_danych" && !bad.wartosc && others.length === 4 && others.every((k) => k.stan === "ok" && k.wartosc), `${bad.stan} | ${others.map((k) => k.stan).join(",")}`);
+    if (kind === "HTTP 503") check(`${name}: przyczyna z narzędzia, bez danych zastępczych`, /nie odpowiada/.test(bad.komunikat) && bad.szczegoly === undefined && bad.link === undefined);
+  }
+}
+{
+  // Wyjątek w funkcji jednej karty (np. nieoczekiwany błąd) → tylko ta karta bez danych.
+  const src = sourcesWith(londonFetch());
+  const e = console.error; console.error = () => {};
+  const h = createDashboardHandler({ hasSession: () => true, sources: { ...src, getHolidays: async () => { throw new Error("boom"); } }, summarize: null, now, log: () => {} });
+  const r = await h(request({ miasto: "Londyn", data: "2026-11-17" }));
+  console.error = e;
+  const b = await r.json();
+  check("Wyjątek w karcie Święta → tylko ona „brak_danych”, status 200", r.status === 200 && b.karty[2].stan === "brak_danych" && b.karty[2].komunikat === "Źródło nie zwróciło danych." && b.karty.filter((k) => k.stan === "ok").length === 4);
+  const h2 = createDashboardHandler({ hasSession: () => true, sources: { ...src, timeIn: () => { throw new RangeError("Invalid time zone"); } }, summarize: null, now, log: () => {} });
+  console.error = () => {};
+  const b2 = await (await h2(request({ miasto: "Londyn", data: "2026-11-17" }))).json();
+  console.error = e;
+  check("Wyjątek w karcie Czas → tylko ona „brak_danych”", b2.karty[4].stan === "brak_danych" && b2.karty.filter((k) => k.stan === "ok").length === 4);
+}
+{
+  // Całe Open-Meteo (także geokodowanie) nie odpowiada → Wikipedia działa, pozostałe bez danych, status 200.
+  const f = londonFetch([["open-meteo.com", status(503)]]);
+  const { handle } = handler({ f, summarize: null });
+  const r = await handle(request({ miasto: "Londyn", data: "2026-11-17" }));
+  const b = await r.json();
+  check("Geokodowanie niedostępne → status 200 (nie błąd całej strony)", r.status === 200 && b.miasto === "Londyn");
+  check("Geokodowanie niedostępne → Wikipedia „ok”, 4 karty „brak_danych”", b.karty[3].stan === "ok" && b.karty[3].wartosc === "Londyn" && [0, 1, 2, 4].every((i) => b.karty[i].stan === "brak_danych" && /Open-Meteo nie odpowiada/.test(b.karty[i].komunikat)));
+  check("Geokodowanie niedostępne → bez zapytań do NBP i Nager (bez zgadywania kraju)", !f.calls.some((c) => c.url.includes("nbp") || c.url.includes("nager")));
+  const missing = await handler({ f: fakeFetch([["geocoding-api", { results: [] }]]) }).handle(request({ miasto: "Xyzabc", data: "2026-11-17" }));
+  check("Nieznane miasto nadal → 400 „Nie znalazłam miasta…”", missing.status === 400);
+}
+{
+  // Bez danych zastępczych przy odświeżaniu: najpierw dane, potem awaria → brak danych (nie stare wartości).
+  let down = false;
+  const f = londonFetch([["api.nbp.pl", () => (down ? status(503) : GBP)]]);
+  const { handle } = handler({ f, summarize: null });
+  const a = await (await handle(request({ miasto: "Londyn", data: "2026-11-17" }))).json();
+  down = true;
+  const b = await (await handle(request({ miasto: "Londyn", data: "2026-11-17" }))).json();
+  check("Odświeżenie z awarią NBP → „brak_danych”, bez poprzedniego kursu", a.karty[1].stan === "ok" && a.karty[1].wartosc === "1 GBP = 5,1234" && b.karty[1].stan === "brak_danych" && b.karty[1].wartosc === "" && !JSON.stringify(b.karty[1]).includes("5,1234"));
+}
+{
+  // Podsumowanie musi wprost wskazać brakujące źródło.
+  const f = () => londonFetch([["api.nbp.pl", status(503)]]);
+  const run = async (text) => {
+    const c = {};
+    const { handle } = handler({ f: f(), summarize: async () => text, counter: c });
+    const b = await (await handle(request({ miasto: "Londyn", data: "2026-11-17" }))).json();
+    return { b, c };
+  };
+  const okText = "Warto spakować kurtkę przeciwdeszczową. Brak danych z NBP o kursie waluty, więc kurs warto sprawdzić przed wyjazdem.";
+  const { b: b1, c: c1 } = await run(okText);
+  check("Podsumowanie wymienia brakujące źródło (NBP) → pokazane", b1.podsumowanie === okText);
+  check("Model dostaje listę brakujących źródeł: [„Waluty (NBP)”]", JSON.stringify(c1.inputs[0].brakujaceZrodla) === '["Waluty (NBP)"]');
+  check("Model dostaje kartę ze stanem „brak danych”, bez wartości", JSON.stringify(c1.inputs[0].karty[1]) .includes('"stan":"brak danych"') && !("wartosc" in c1.inputs[0].karty[1]));
+  const { b: b2 } = await run("Warto spakować kurtkę przeciwdeszczową. Różnica czasu wynosi minus jedną godzinę.");
+  check("Podsumowanie pomija brakujące źródło → „Podsumowanie niedostępne” (null), karty zostają", b2.podsumowanie === null && b2.karty.length === 5 && b2.karty.filter((k) => k.stan === "ok").length === 4);
+  const { b: b3 } = await run("Warto spakować kurtkę przeciwdeszczową. Brak danych o walucie – proszę ją sprawdzić przed podróżą.");
+  check("Wymienienie po nazwie karty („walucie”) też przyjęte", typeof b3.podsumowanie === "string");
+  const { c: c4 } = await (async () => { const c = {}; const { handle } = handler({ counter: c }); await handle(request({ miasto: "Londyn", data: "2026-11-17" })); return { c }; })();
+  check("Wszystkie źródła działają → lista brakujących pusta", JSON.stringify(c4.inputs[0].brakujaceZrodla) === "[]");
+  check("missingSources / summaryNamesMissing", JSON.stringify(missingSources([{ id: "pogoda", stan: "brak_danych" }, { id: "czas", stan: "ok" }])) === '["Pogoda (Open-Meteo)"]' && summaryNamesMissing("Brak prognozy pogody.", [{ id: "pogoda", stan: "brak_danych" }]) && !summaryNamesMissing("Weź parasol.", [{ id: "pogoda", stan: "brak_danych" }]));
+  check("Odmiana słów: „walucie”, „świąt”, „pogodzie”", summaryNamesMissing("Brak danych o walucie.", [{ id: "waluty", stan: "brak_danych" }]) && summaryNamesMissing("Brak listy świąt.", [{ id: "swieta", stan: "brak_danych" }]) && summaryNamesMissing("Brak informacji o pogodzie.", [{ id: "pogoda", stan: "brak_danych" }]));
+  check("Instrukcja: wprost wskazać brakujące źródło, bez wartości zastępczych", AMBER_DASHBOARD_INSTRUCTIONS.includes("napisz wprost, którego źródła zabrakło") && AMBER_DASHBOARD_INSTRUCTIONS.includes("nie wstawiaj wartości zastępczych"));
+}
+{
+  // Strona: stany „OK”, „Ładuję…”, „Brak danych” i komunikat „Brak danych — spróbuj odświeżyć”.
+  const ui = readFileSync(new URL("../app/dashboard/dashboard.tsx", import.meta.url), "utf8");
+  check("UI: etykiety stanów OK / Ładuję… / Brak danych", ui.includes(">OK<") && ui.includes("Ładuję…") && ui.includes(">Brak danych<"));
+  check("UI: „Brak danych — spróbuj odświeżyć” i przyczyna mniejszym drukiem", ui.includes('"Brak danych — spróbuj odświeżyć"') && ui.includes('className="card-reason"'));
+  check("UI: przy błędzie zapytania poprzednie karty nie zostają (setResult(null))", (ui.match(/setResult\(null\)/g) ?? []).length === 2);
+  check("Nadal bez trybu porównania (Fast)", !/porown|Porównaj/i.test(ui));
 }
 
 console.log(`\nWynik: ${passed} zaliczonych, ${failed} niezaliczonych.`);
