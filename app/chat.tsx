@@ -12,6 +12,8 @@ import {
   HISTORY_PAGE,
   LATEST_CONVERSATION_API,
   NEW_CONVERSATION_URL,
+  PROFILE_API,
+  PROFILE_PAGE,
   conversationApiUrl,
   conversationFromSearch,
   conversationPageUrl,
@@ -36,6 +38,7 @@ import {
   readGeneratedImagePart,
   readConversationId,
   readLatestConversation,
+  readProfileResponse,
   type AnalysisResult,
 } from "@/lib/amber-chat-client";
 
@@ -144,6 +147,8 @@ export default function Chat() {
   // Lekcja 5, Warsztat 2: numer bieżącej rozmowy w bazie (null = nowa rozmowa) i wczytywanie ostatniej rozmowy po F5.
   const conversationIdRef = useRef<number | null>(null);
   const [historyStatus, setHistoryStatus] = useState<"loading" | "ready" | "error">("loading");
+  // Lekcja 5, Warsztat 3 (Standard): powitanie w pustej rozmowie (z imieniem z profilu). Tylko na ekranie – nie trafia do historii.
+  const [greeting, setGreeting] = useState<string | null>(null);
   // useChat wysyła historię rozmowy do /api/agent (mode=chat) i odbiera odpowiedź strumieniowo.
   const { messages, sendMessage, status, error, clearError, stop, setMessages } = useChat({
     transport,
@@ -217,6 +222,21 @@ export default function Chat() {
     };
     // Tylko raz, po otwarciu strony.
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Warsztat 3 (Standard): powitanie z profilu – po otwarciu strony i po „Nowa rozmowa” (imię mogło się zmienić).
+  async function loadGreeting() {
+    try {
+      const response = await fetch(PROFILE_API, { cache: "no-store" });
+      if (!response.ok) return;
+      const data = readProfileResponse(await response.json().catch(() => null));
+      if (data) setGreeting(data.greeting);
+    } catch {
+      // bez powitania – zostaje zwykła podpowiedź
+    }
+  }
+  useEffect(() => {
+    void loadGreeting();
   }, []);
 
   // Każda wiadomość do /api/agent niesie numer rozmowy (null = serwer założy nową rozmowę).
@@ -365,6 +385,7 @@ export default function Chat() {
     setHistoryStatus("ready");
     // Standard: F5 po „Nowa rozmowa” nie przywraca poprzedniej rozmowy.
     window.history.replaceState(null, "", NEW_CONVERSATION_URL);
+    void loadGreeting();
   }
 
   // Wyjście: serwer usuwa cookie z sesją, a strona wraca do ekranu hasła.
@@ -385,6 +406,10 @@ export default function Chat() {
         <Link href={HISTORY_PAGE} className="logout">
           Historia
         </Link>
+        {/* Lekcja 5, Warsztat 3 (Standard): profil klienta */}
+        <Link href={PROFILE_PAGE} className="logout">
+          Profil
+        </Link>
         {/* Lekcja 4, Warsztat 3: link do Dashboardu podróży */}
         <Link href="/dashboard" className="logout">
           Dashboard podróży
@@ -395,11 +420,16 @@ export default function Chat() {
       </div>
 
       <div className="messages" aria-label="Rozmowa" aria-live="polite">
-        {messages.length === 0 && analyses.length === 0 && (
-          <p className="hint">
-            {historyStatus === "loading" ? HISTORY_LOADING_MESSAGE : "Napisz pierwszą wiadomość, aby zacząć rozmowę."}
-          </p>
+        {messages.length === 0 && analyses.length === 0 && historyStatus === "loading" && (
+          <p className="hint">{HISTORY_LOADING_MESSAGE}</p>
         )}
+        {/* Warsztat 3 (Standard): powitanie Amber w nowej rozmowie (bez profilu – zwykła podpowiedź) */}
+        {messages.length === 0 && analyses.length === 0 && historyStatus !== "loading" &&
+          (greeting ? (
+            <div className="message assistant greeting">{greeting}</div>
+          ) : (
+            <p className="hint">Napisz pierwszą wiadomość, aby zacząć rozmowę.</p>
+          ))}
 
         {analysesAfter(0)}
 

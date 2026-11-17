@@ -80,6 +80,32 @@ export const HISTORY_PAGE = "/history";
 export const NEW_CONVERSATION_URL = "/?new=1";
 export const conversationPageUrl = (id: number) => `/?c=${id}`;
 export const conversationApiUrl = (id: number) => `/api/conversations/${id}`;
+// Lekcja 5, Warsztat 3 (Standard): profil klienta (/api/profile) – powitanie w czacie i strona /profile.
+export const PROFILE_API = "/api/profile";
+export const PROFILE_PAGE = "/profile";
+export type ProfileView = { name: string | null; preferences: Record<string, string> };
+
+// Odpowiedź /api/profile → profil + powitanie (null = nieprawidłowa odpowiedź).
+export function readProfileResponse(data: unknown): { profile: ProfileView; greeting: string } | null {
+  if (typeof data !== "object" || data === null) return null;
+  const { profile, greeting } = data as { profile?: unknown; greeting?: unknown };
+  if (typeof greeting !== "string" || typeof profile !== "object" || profile === null) return null;
+  const { name, preferences } = profile as { name?: unknown; preferences?: unknown };
+  if (name !== null && typeof name !== "string") return null;
+  if (typeof preferences !== "object" || preferences === null || Array.isArray(preferences)) return null;
+  const prefs: Record<string, string> = {};
+  for (const [key, value] of Object.entries(preferences as Record<string, unknown>)) {
+    if (typeof value === "string") prefs[key] = value;
+  }
+  return { profile: { name, preferences: prefs }, greeting };
+}
+
+// Nazwa pozycji do wyświetlenia: „styl_odpowiedzi” → „Styl odpowiedzi”.
+export function preferenceLabel(key: string): string {
+  const text = key.replace(/_/g, " ");
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
 // Dla szybkich: komunikat, gdy usunięcie rozmowy się nie uda (przycisk „Usuń” na /history).
 export const DELETE_ERROR_MESSAGE = "Nie udało się usunąć rozmowy. Spróbuj ponownie.";
 

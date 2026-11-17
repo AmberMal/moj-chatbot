@@ -459,3 +459,38 @@ h1 { margin: 0; font-size: 26px; }
 }
 .history-empty p { margin: 0; max-width: 520px; line-height: 1.5; }
 .history-empty a.logout { text-decoration: none; }
+
+/* Lekcja 5, Warsztat 3 (Standard): powitanie w czacie i strona /profile */
+.message.greeting { align-self: flex-start; }
+.profile-page h1 { margin: 0; font-size: 24px; }
+.profile-editor { display: flex; flex-direction: column; gap: 14px; }
+.profile-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+.profile-card h2 { margin: 0; font-size: 17px; }
+.profile-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.profile-row input {
+  flex: 1 1 180px;
+  min-width: 0;
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  font: inherit;
+  background: var(--surface);
+  color: var(--ink);
+}
+.profile-row input:focus-visible { outline: 2px solid var(--link); outline-offset: 1px; }
+.profile-label { flex: 0 0 150px; font-weight: 600; overflow-wrap: anywhere; }
+.profile-add { padding-top: 8px; border-top: 1px dashed var(--border); }
+.profile-ok { margin: 0; padding: 10px 14px; border-radius: 10px; background: var(--ok-soft); color: var(--ok); }
+.profile-clear { display: flex; justify-content: flex-end; }
+@media (max-width: 560px) {
+  .profile-label { flex-basis: 100%; }
+}
