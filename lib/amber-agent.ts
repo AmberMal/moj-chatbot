@@ -26,6 +26,7 @@ import type {
   TurnSource,
 } from "./amber-history";
 import type { AmberResult } from "./amber-output";
+import type { ConversationStore } from "./amber-conversations";
 
 export const AGENT_MODES = ["chat", "analyze"] as const;
 export type AgentMode = (typeof AGENT_MODES)[number];
@@ -281,10 +282,28 @@ export type AgentDeps = {
   toolTimeoutMs?: number;
   now?: () => Date;
   log?: (message: string) => void;
+  // Lekcja 5, Warsztat 2: zapis rozmów w bazie (null / brak = bez zapisu, czat działa dalej).
+  conversations?: () => ConversationStore | null;
 };
 
-type AgentMetadata = { kind: "chat"; sig: string; fetchedAt?: string; tools?: string[]; model?: string; stats?: AgentStats };
+// conversationId (lekcja 5) – numer rozmowy w bazie; jak stats służy tylko przeglądarce i nie wraca na serwer.
+type AgentMetadata = {
+  kind: "chat";
+  sig: string;
+  fetchedAt?: string;
+  tools?: string[];
+  model?: string;
+  stats?: AgentStats;
+  conversationId?: number;
+};
 type AgentUIMessage = UIMessage<AgentMetadata>;
+
+// Lekcja 5: numer rozmowy z przeglądarki. Brak / null = nowa rozmowa; inna wartość niż dodatnia liczba całkowita = błąd 400.
+export function parseConversationId(value: unknown): { ok: true; id: number | null } | { ok: false } {
+  if (value === undefined || value === null) return { ok: true, id: null };
+  if (typeof value === "number" && Number.isSafeInteger(value) && value > 0) return { ok: true, id: value };
+  return { ok: false };
+}
 
 function text(message: string, status: number): Response {
   return new Response(message, { status, headers: { "Content-Type": "text/plain; charset=utf-8" } });
@@ -477,7 +496,12 @@ export function createAgentHandler(deps: AgentDeps) {
     let turns: ChatTurn[] = [];
     let historyKey: Buffer | null = null;
     let sessionId = "";
+    let conversationId: number | null = null;
     if (mode === "chat") {
+      // Lekcja 5: numer rozmowy w bazie (brak = nowa rozmowa) – sprawdzany przed wywołaniem modelu.
+      const conversation = parseConversationId((body as { conversationId?: unknown }).conversationId);
+      if (!conversation.ok) return text(AGENT_MESSAGES.badRequest, 400);
+      conversationId = conversation.id;
       historyKey = deps.history.deriveHistoryKey(session.secret);
       sessionId = deps.history.sessionIdFromToken(session.token);
       const history = deps.history.checkChatHistory((body as { messages?: unknown }).messages, {
@@ -512,7 +536,7 @@ export function createAgentHandler(deps: AgentDeps) {
       return Response.json({ analysis: result.output, ...(result.modelId ? { model: result.modelId } : {}) });
     }
 
-    return streamChat({ req, deps, models, turns, historyKey: historyKey!, sessionId, log, now, startedAt });
+    return streamChat({ req, deps, models, turns, historyKey: historyKey!, sessionId, conversationId, log, now, startedAt });
   };
 }
 
@@ -524,6 +548,7 @@ function streamChat({
   turns,
   historyKey,
   sessionId,
+  conversationId,
   log,
   now,
   startedAt,
@@ -534,6 +559,7 @@ function streamChat({
   turns: ChatTurn[];
   historyKey: Buffer;
   sessionId: string;
+  conversationId: number | null;
   log: (message: string) => void;
   now: () => Date;
   startedAt: number;
@@ -790,6 +816,24 @@ function streamChat({
         { sources, fetchedAt, tools, model },
       );
       const stats: AgentStats = { kroki: modelSteps, narzedzia: guard.executed, czasMs: elapsed() };
+
+      // Lekcja 5, Warsztat 2: zapis w bazie – raz, po zakończeniu odpowiedzi (nie każdy kawałek strumienia).
+      // Błąd bazy nie psuje odpowiedzi: klient ją dostaje, szczegóły tylko w logu serwera.
+      let savedConversationId: number | undefined;
+      const store = deps.conversations?.() ?? null;
+      if (store) {
+        const generatedImage = results.some(
+          (r) => r.name === IMAGE_TOOL_NAME && r.kind === "ok" && (r.output as { ok?: unknown } | null)?.ok === true,
+        );
+        try {
+          savedConversationId = await store.saveExchange({ conversationId, turns, replyText, generatedImage });
+          log(`[Amber] /api/agent – zapisano w bazie (rozmowa ${savedConversationId}).`);
+        } catch (error) {
+          const details = error instanceof Error ? error.message : String(error);
+          console.error(`[Amber] /api/agent – nie zapisano rozmowy w bazie: ${details.slice(0, 300)}`);
+        }
+      }
+
       const metadata: AgentMetadata = {
         kind: "chat",
         sig,
@@ -797,6 +841,7 @@ function streamChat({
         ...(tools.length > 0 ? { tools } : {}),
         ...(model ? { model } : {}),
         stats,
+        ...(savedConversationId !== undefined ? { conversationId: savedConversationId } : {}),
       };
 
       if (sources.length > 0) log(`[Amber] /api/agent – źródła (${sources.length}): ${sources.map((s) => s.url).join(" | ")}`);

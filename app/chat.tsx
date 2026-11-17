@@ -4,9 +4,12 @@ import { useChat } from "@ai-sdk/react";
 import Link from "next/link";
 import { DefaultChatTransport, type UIMessage } from "ai";
 import { useRouter } from "next/navigation";
-import { Fragment, useRef, useState, type ChangeEvent, type FormEvent } from "react";
+import { Fragment, useEffect, useRef, useState, type ChangeEvent, type FormEvent } from "react";
 import {
   AGENT_API,
+  HISTORY_LOAD_ERROR,
+  HISTORY_LOADING_MESSAGE,
+  LATEST_CONVERSATION_API,
   MAX_IMAGE_DESCRIPTION_CHARS,
   NO_IMAGE_MESSAGE,
   STEP_LIMIT_MESSAGE,
@@ -26,6 +29,8 @@ import {
   prepareAgentMessages,
   readAnalysisResponse,
   readGeneratedImagePart,
+  readConversationId,
+  readLatestConversation,
   type AnalysisResult,
 } from "@/lib/amber-chat-client";
 
@@ -129,10 +134,16 @@ export default function Chat() {
   const [stoppedAfterIds, setStoppedAfterIds] = useState<string[]>([]);
   // Oznaczenie przerwanego pytania w stanie czatu (setMessages z useChat – dostępne dopiero po wywołaniu hooka).
   const setMessagesRef = useRef<((update: (messages: UIMessage[]) => UIMessage[]) => void) | null>(null);
+  // Lekcja 5, Warsztat 2: numer bieżącej rozmowy w bazie (null = nowa rozmowa) i wczytywanie ostatniej rozmowy po F5.
+  const conversationIdRef = useRef<number | null>(null);
+  const [historyStatus, setHistoryStatus] = useState<"loading" | "ready" | "error">("loading");
   // useChat wysyła historię rozmowy do /api/agent (mode=chat) i odbiera odpowiedź strumieniowo.
   const { messages, sendMessage, status, error, clearError, stop, setMessages } = useChat({
     transport,
     onFinish: ({ message, messages: all, finishReason, isError, isAbort }) => {
+      // Lekcja 5: serwer zapisał wiadomości w bazie – kolejne trafią do tej samej rozmowy.
+      const savedId = readConversationId(message.metadata);
+      if (savedId !== null) conversationIdRef.current = savedId;
       if (isAbort) {
         const target = stopNoteTarget(message, all);
         if (target?.kind === "assistant") setStoppedIds((ids) => [...ids, target.id]);
@@ -155,6 +166,41 @@ export default function Chat() {
   });
 
   setMessagesRef.current = setMessages;
+
+  // Lekcja 5, Warsztat 2: po odświeżeniu strony wczytujemy ostatnią rozmowę z bazy (serwer najpierw sprawdza sesję).
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const response = await fetch(LATEST_CONVERSATION_API, { cache: "no-store" });
+        if (cancelled) return;
+        if (!response.ok) {
+          setHistoryStatus(response.status === 401 ? "ready" : "error");
+          return;
+        }
+        const data = readLatestConversation(await response.json().catch(() => null));
+        if (cancelled) return;
+        if (!data) {
+          setHistoryStatus("error");
+          return;
+        }
+        conversationIdRef.current = data.conversationId;
+        if (data.messages.length > 0) setMessages(data.messages);
+        setHistoryStatus("ready");
+      } catch {
+        if (!cancelled) setHistoryStatus("error");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // Tylko raz, po otwarciu strony.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Każda wiadomość do /api/agent niesie numer rozmowy (null = serwer założy nową rozmowę).
+  const sendChat = (message: Parameters<typeof sendMessage>[0]) =>
+    sendMessage(message, { body: { conversationId: conversationIdRef.current } });
   const isBusy = status === "submitted" || status === "streaming";
   const isGenerating = imageRequestPending && isBusy;
   // „Model pisze…” – od wysłania aż do pojawienia się pierwszej treści odpowiedzi (bez pustego dymka).
@@ -163,7 +209,7 @@ export default function Chat() {
     status === "submitted" ||
     (status === "streaming" && lastMessage?.role === "assistant" && !hasVisibleContent(lastMessage));
   // Gdy Amber pisze, trwa generowanie obrazu albo analiza – wszystkie przyciski są zablokowane.
-  const isLocked = isBusy || isGenerating || isAnalyzing;
+  const isLocked = isBusy || isGenerating || isAnalyzing || historyStatus === "loading";
   const canSend = (input.trim().length > 0 || pendingImage !== null) && !isLocked;
   const canGenerate = input.trim().length > 0 && input.trim().length <= MAX_IMAGE_PROMPT_CHARS && !isLocked;
   const canAnalyze = input.trim().length > 0 && input.trim().length <= MAX_MESSAGE_CHARS && !isLocked;
@@ -235,7 +281,7 @@ export default function Chat() {
     if (error) clearError();
     imageRequestRef.current = true;
     setImageRequestPending(true);
-    sendMessage({ text: request });
+    sendChat({ text: request });
     setInput("");
   }
 
@@ -270,15 +316,32 @@ export default function Chat() {
     if ((!text && !pendingImage) || isLocked) return; // blokada pustych wiadomości
     if (error) clearError();
     if (pendingImage) {
-      sendMessage({
+      sendChat({
         text,
         files: [{ type: "file", mediaType: "image/jpeg", url: pendingImage.url, filename: pendingImage.name }],
       });
       setPendingImage(null);
     } else {
-      sendMessage({ text });
+      sendChat({ text });
     }
     setInput("");
+  }
+
+  // Lekcja 5, Warsztat 2: „Nowa rozmowa” – pusty czat; poprzednia rozmowa zostaje w bazie.
+  function handleNewConversation() {
+    if (isLocked) return;
+    conversationIdRef.current = null;
+    setMessages([]);
+    setAnalyses([]);
+    setStoppedIds([]);
+    setStoppedAfterIds([]);
+    setStepLimitIds([]);
+    setNoImageIds([]);
+    setPendingImage(null);
+    setImageError(null);
+    setInput("");
+    if (error) clearError();
+    setHistoryStatus("ready");
   }
 
   // Wyjście: serwer usuwa cookie z sesją, a strona wraca do ekranu hasła.
@@ -291,6 +354,10 @@ export default function Chat() {
   return (
     <>
       <div className="toolbar">
+        {/* Lekcja 5, Warsztat 2: nowa rozmowa (stara zostaje w bazie) */}
+        <button type="button" className="logout" disabled={isLocked} onClick={handleNewConversation}>
+          Nowa rozmowa
+        </button>
         {/* Lekcja 4, Warsztat 3: link do Dashboardu podróży */}
         <Link href="/dashboard" className="logout">
           Dashboard podróży
@@ -302,7 +369,9 @@ export default function Chat() {
 
       <div className="messages" aria-label="Rozmowa" aria-live="polite">
         {messages.length === 0 && analyses.length === 0 && (
-          <p className="hint">Napisz pierwszą wiadomość, aby zacząć rozmowę.</p>
+          <p className="hint">
+            {historyStatus === "loading" ? HISTORY_LOADING_MESSAGE : "Napisz pierwszą wiadomość, aby zacząć rozmowę."}
+          </p>
         )}
 
         {analysesAfter(0)}
@@ -426,6 +495,11 @@ export default function Chat() {
       {error && (
         <p className="error" role="alert">
           {error.message}
+        </p>
+      )}
+      {historyStatus === "error" && (
+        <p className="error" role="alert">
+          {HISTORY_LOAD_ERROR}
         </p>
       )}
 

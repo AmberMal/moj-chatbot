@@ -57,10 +57,47 @@ export function prepareAgentMessages(messages: UIMessage[]): UIMessage[] {
   });
 }
 
+// Liczniki (stats) i numer rozmowy w bazie (conversationId, lekcja 5) służą tylko przeglądarce – nie wracają na serwer.
 function withoutStats(metadata: unknown): unknown {
-  if (typeof metadata !== "object" || metadata === null || !("stats" in metadata)) return metadata;
-  const { stats: _stats, ...rest } = metadata as Record<string, unknown>;
+  if (typeof metadata !== "object" || metadata === null || !("stats" in metadata || "conversationId" in metadata)) {
+    return metadata;
+  }
+  const { stats: _stats, conversationId: _conversationId, ...rest } = metadata as Record<string, unknown>;
   return rest;
+}
+
+// ---------------------------------------------------------------------------
+// Lekcja 5, Warsztat 2: trwałe rozmowy (Supabase)
+// ---------------------------------------------------------------------------
+
+export const LATEST_CONVERSATION_API = "/api/conversations/latest";
+export const HISTORY_LOADING_MESSAGE = "Wczytuję rozmowę…";
+export const HISTORY_LOAD_ERROR = "Nie udało się wczytać poprzedniej rozmowy. Możesz pisać dalej – zacznie się nowa rozmowa.";
+
+// Numer rozmowy z metadanych odpowiedzi Amber (serwer dodaje go po zapisie w bazie).
+export function readConversationId(metadata: unknown): number | null {
+  if (typeof metadata !== "object" || metadata === null) return null;
+  const value = (metadata as { conversationId?: unknown }).conversationId;
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : null;
+}
+
+// Odpowiedź GET /api/conversations/latest → numer rozmowy + wiadomości do useChat (null = nieprawidłowa odpowiedź).
+export function readLatestConversation(data: unknown): { conversationId: number | null; messages: UIMessage[] } | null {
+  if (typeof data !== "object" || data === null) return null;
+  const { conversationId, messages } = data as { conversationId?: unknown; messages?: unknown };
+  if (!Array.isArray(messages)) return null;
+  const valid = messages.every(
+    (message) =>
+      typeof message === "object" &&
+      message !== null &&
+      typeof (message as UIMessage).id === "string" &&
+      ((message as UIMessage).role === "user" || (message as UIMessage).role === "assistant") &&
+      Array.isArray((message as UIMessage).parts),
+  );
+  if (!valid) return null;
+  const id = conversationId === null ? null : readConversationId({ conversationId });
+  if (conversationId !== null && id === null) return null;
+  return { conversationId: id, messages: messages as UIMessage[] };
 }
 
 // Warsztat 2 (Standard): liczniki pod odpowiedzią, np. „Kroki modelu: 3 · Wywołania narzędzi: 2 · Czas: 8,4 s”.

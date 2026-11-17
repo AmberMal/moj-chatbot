@@ -25,6 +25,7 @@ import {
   signAgentChatTurn,
 } from "../../../lib/amber-history";
 import { createAgentHandler } from "../../../lib/amber-agent";
+import { getConversationStore } from "../../../lib/supabase";
 
 // Warsztat 3: jeden endpoint, dwa tryby (mode=chat, mode=analyze). Logika: lib/amber-agent.ts.
 // Ten plik działa tylko na serwerze – klucz API nie trafia do przeglądarki.
@@ -93,6 +94,8 @@ export async function POST(req: Request) {
     history: { deriveHistoryKey, sessionIdFromToken, checkChatHistory, signAgentChatTurn },
     generateAmberOutput,
     maxTextChars: MAX_USER_MESSAGE_CHARS,
+    // Lekcja 5, Warsztat 2: zapis rozmów w Supabase (po sprawdzeniu sesji i po zakończeniu odpowiedzi).
+    conversations: getConversationStore,
   });
   return handle(req);
 }
