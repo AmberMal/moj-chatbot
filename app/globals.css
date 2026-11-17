@@ -428,3 +428,34 @@ h1 { margin: 0; font-size: 26px; }
 .history-item:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
 .history-title { font-weight: 600; overflow-wrap: anywhere; }
 .history-meta { color: var(--muted); font-size: 13px; }
+
+/* Lekcja 5, Warsztat 2 (Dla szybkich): „Usuń” przy rozmowie i pusta lista */
+.history-list li { display: flex; align-items: stretch; gap: 8px; }
+.history-list li .history-item { flex: 1; min-width: 0; }
+.history-actions { display: flex; flex-direction: column; justify-content: center; align-items: flex-end; gap: 4px; }
+.history-delete {
+  padding: 8px 14px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--danger);
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+}
+.history-delete:hover:not(:disabled) { border-color: var(--danger); background: var(--danger-soft); }
+.history-delete:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
+.history-delete:disabled { opacity: 0.5; cursor: not-allowed; }
+.history-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding: 28px 20px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  text-align: center;
+}
+.history-empty p { margin: 0; max-width: 520px; line-height: 1.5; }
+.history-empty a.logout { text-decoration: none; }

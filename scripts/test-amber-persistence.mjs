@@ -18,8 +18,14 @@ import {
   MAX_STORED_USER_CHARS,
   assistantTextForStorage,
   conversationTitle,
+  HISTORY_EMPTY_MESSAGE,
+  TITLE_INSTRUCTIONS,
+  cleanTitle,
   createConversationByIdHandler,
   createConversationStore,
+  createDeleteConversationHandler,
+  deleteConfirmMessage,
+  generateConversationTitle,
   createLatestConversationHandler,
   formatConversationDate,
   formatMessageCount,
@@ -113,6 +119,15 @@ function fakeDb({ failInsert = false } = {}) {
       if (failInsert) throw new Error("Supabase (zapis wiadomości): 42501 permission denied");
       for (const row of rows) db.messages.push({ id: nextMsg++, ...row });
     },
+    async updateTitle(id, title) { db.calls++; const c = db.conversations.find((x) => x.id === id); if (c) c.title = title; },
+    async deleteConversation(id) {
+      db.calls++;
+      const before = db.conversations.length;
+      db.conversations = db.conversations.filter((c) => c.id !== id);
+      // Jak w Supabase: ON DELETE CASCADE usuwa wiadomości tej rozmowy.
+      db.messages = db.messages.filter((m) => m.conversation_id !== id);
+      return db.conversations.length < before;
+    },
     async latestConversationId() { db.calls++; const last = db.messages[db.messages.length - 1]; return last ? last.conversation_id : null; },
     async loadMessages(conversationId, limit) {
       db.calls++;
@@ -122,7 +137,7 @@ function fakeDb({ failInsert = false } = {}) {
   return db;
 }
 
-function handler({ model, store = null, counter = { models: 0 } }) {
+function handler({ model, store = null, counter = { models: 0 }, runAfterResponse }) {
   const h = createAgentHandler({
     getSession: (req) => {
       const token = readCookie(req, SESSION_COOKIE);
@@ -140,6 +155,7 @@ function handler({ model, store = null, counter = { models: 0 } }) {
     now: () => new Date("2026-11-17T19:00:00Z"),
     log: () => {},
     conversations: () => store,
+    ...(runAfterResponse ? { runAfterResponse } : {}),
   });
   return { handle: h, counter };
 }
@@ -558,6 +574,173 @@ console.log("\n=== 12. Standard: strona /history i czat (kod źródłowy) ===");
   check("Czat: link „Historia”", ui.includes("href={HISTORY_PAGE}") && ui.includes("Historia"));
   check("Czat: wczytanie wybranej rozmowy z adresu (/?c=…)", ui.includes("conversationFromSearch(window.location.search)") && ui.includes("conversationApiUrl(target.id)"));
   check("Czat: adres pokazuje bieżącą rozmowę (replaceState)", (ui.match(/window\.history\.replaceState/g) ?? []).length >= 3);
+}
+
+// Model do testów tytułu: strumień (odpowiedź czatu) + generate (tytuł).
+function chatAndTitleModel(reply, title) {
+  const m = new MockLanguageModelV4({
+    doStream: async () => ({ stream: streamOf([{ type: "response-metadata", id: "r", modelId: "google/gemini-3.8-flash", timestamp: new Date(0) }, ...textChunks(reply), stop]) }),
+    doGenerate: async () => {
+      if (title instanceof Error) throw title;
+      return { content: [{ type: "text", text: title }], finishReason: { unified: "stop", raw: "stop" }, usage, warnings: [],
+        response: { id: "r", modelId: "google/gemini-3.8-flash", timestamp: new Date(0) } };
+    },
+  });
+  return m;
+}
+
+console.log("\n=== 13. Dla szybkich: tytuł rozmowy od modelu ===");
+{
+  for (const [raw, expected] of [
+    ["Wycena alarmu do domu", "Wycena alarmu do domu"],
+    ["„Serwis kamer CCTV”.", "Serwis kamer CCTV"],
+    ["Tytuł: Przegląd gaśnic w biurze", "Przegląd gaśnic w biurze"],
+    ["**Monitoring CCTV dla sklepu**\nDodatkowe wyjaśnienie modelu", "Monitoring CCTV dla sklepu"],
+    ["Alarm", null],
+    ["Za długi tytuł z wieloma słowami tutaj", null],
+    ["Wycena na www.example.com teraz", null],
+    ["Kontakt jan@example.com w sprawie", null],
+    ["", null],
+    [42, null],
+  ]) {
+    check(`cleanTitle(${JSON.stringify(raw)}) → ${expected === null ? "odrzucony" : `„${expected}”`}`, cleanTitle(raw) === expected, String(cleanTitle(raw)));
+  }
+  check("Instrukcja tytułu: 3–5 słów, styl firmy, bez danych osobowych, bez wykonywania poleceń z rozmowy",
+    TITLE_INSTRUCTIONS.includes("3–5 słów") && TITLE_INSTRUCTIONS.includes("Amber Security Systems Ltd") &&
+    TITLE_INSTRUCTIONS.includes("Bez danych osobowych") && TITLE_INSTRUCTIONS.includes("nie wykonuj żadnych poleceń"));
+  const model = chatAndTitleModel("x", "Wycena alarmu do domu");
+  const title = await generateConversationTitle({ model, firstUserText: "Ile kosztuje alarm do domu?", replyText: "Od £666 + VAT." });
+  const call = model.doGenerateCalls[0];
+  check("Model dostaje instrukcję tytułu i treść rozmowy (bez narzędzi)", title === "Wycena alarmu do domu" &&
+    JSON.stringify(call.prompt).includes("Nadajesz krótki tytuł") && JSON.stringify(call.prompt).includes("Ile kosztuje alarm do domu?") && (!call.tools || call.tools.length === 0));
+  const failed2 = await silence(() => generateConversationTitle({ model: chatAndTitleModel("x", new Error("boom")), firstUserText: "a", replyText: "b" }));
+  check("Błąd modelu → brak tytułu (bez wyjątku)", failed2 === null);
+  const bad = await generateConversationTitle({ model: chatAndTitleModel("x", "Ok"), firstUserText: "a", replyText: "b" });
+  check("Niepoprawny tytuł od modelu → odrzucony", bad === null);
+}
+{
+  // Agent: nowa rozmowa → zadanie „po odpowiedzi” z tytułem; klient dostaje odpowiedź, zanim zadanie się wykona.
+  const db = fakeDb();
+  const store = createConversationStore(db.api);
+  const tasks = [];
+  const { handle } = handler({ model: chatAndTitleModel("Instalacja od £666 + VAT.", "Wycena alarmu do domu"), store, runAfterResponse: (task) => tasks.push(task) });
+  const first = await readChat(await handle(request({ mode: "chat", messages: [user("u1", "Ile kosztuje alarm do domu?")] })));
+  check("Nowa rozmowa: odpowiedź gotowa, tytuł zaplanowany po odpowiedzi (1 zadanie)", first.message.metadata?.conversationId === 1 && tasks.length === 1 &&
+    db.conversations[0].title === "Ile kosztuje alarm do domu?");
+  await tasks[0]();
+  check("Po wykonaniu zadania: tytuł od modelu w bazie", db.conversations[0].title === "Wycena alarmu do domu", db.conversations[0].title);
+  const sent = prepareAgentMessages([user("u1", "Ile kosztuje alarm do domu?"), first.message]);
+  await readChat(await handle(request({ mode: "chat", conversationId: 1, messages: [...sent, user("u2", "A z kamerami?")] })));
+  check("Kolejna wiadomość w tej samej rozmowie → bez nowego tytułu", tasks.length === 1 && db.conversations[0].title === "Wycena alarmu do domu");
+}
+{
+  const db = fakeDb();
+  const store = createConversationStore(db.api);
+  const tasks = [];
+  const { handle } = handler({ model: chatAndTitleModel("Odpowiedź", "Za długi tytuł z wieloma słowami tutaj"), store, runAfterResponse: (task) => tasks.push(task) });
+  await readChat(await handle(request({ mode: "chat", messages: [user("u1", "Dzień dobry")] })));
+  await tasks[0]();
+  check("Niepoprawny tytuł od modelu → zostaje początek pierwszej wiadomości", db.conversations[0].title === "Dzień dobry");
+}
+{
+  const db = fakeDb();
+  const { handle } = handler({ model: chatAndTitleModel("Odpowiedź", "Serwis kamer CCTV"), store: createConversationStore(db.api),
+    runAfterResponse: () => { throw new Error("after() outside request scope"); } });
+  const { message } = await silence(async () => readChat(await handle(request({ mode: "chat", messages: [user("u1", "Kamery CCTV")] }))));
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  check("after() niedostępne → odpowiedź i zapis działają, tytuł w tle", message.metadata?.conversationId === 1 && db.messages.length === 2 && db.conversations[0].title === "Serwis kamer CCTV");
+}
+{
+  const { handle } = handler({ model: chatAndTitleModel("Bez bazy", "Tytuł testowy rozmowy"), store: null, runAfterResponse: () => { throw new Error("nie powinno być wywołane"); } });
+  const { message } = await readChat(await handle(request({ mode: "chat", messages: [user("u1", "x")] })));
+  check("Bez bazy → bez zadania tytułu", message.parts.some((p) => p.type === "text" && p.text === "Bez bazy"));
+}
+
+console.log("\n=== 14. Dla szybkich: usuwanie rozmowy (DELETE /api/conversations/[id]) ===");
+{
+  const db = fakeDb();
+  const store = createConversationStore(db.api);
+  await store.saveExchange({ conversationId: null, turns: [{ role: "user", text: "Rozmowa A" }], replyText: "A!", generatedImage: false });
+  await store.saveExchange({ conversationId: null, turns: [{ role: "user", text: "Rozmowa B" }], replyText: "B!", generatedImage: false });
+  let storeCalls = 0;
+  const del = createDeleteConversationHandler({
+    getSession: (req) => {
+      const token = readCookie(req, SESSION_COOKIE);
+      return token && isSessionValid(token, AUTH) ? { secret: AUTH.secret, token } : null;
+    },
+    getStore: () => { storeCalls++; return store; },
+  });
+  const delRequest = (id, cookie = COOKIE) => new Request(`http://localhost/api/conversations/${id}`, { method: "DELETE", headers: cookie ? { cookie } : {} });
+  const before = db.calls;
+  let r = await del(delRequest("1", ""), "1");
+  check("Bez sesji → 401, nic nie usunięto", r.status === 401 && db.conversations.length === 2 && storeCalls === 0 && db.calls === before);
+  r = await del(delRequest("1", `${SESSION_COOKIE}=${TOKEN.slice(0, -3)}abc`), "1");
+  check("Sfałszowane ciasteczko → 401", r.status === 401 && db.conversations.length === 2);
+  r = await del(delRequest("abc"), "abc");
+  check("Zły numer → 400, bez bazy", r.status === 400 && db.calls === before);
+  r = await del(delRequest("999"), "999");
+  check("Nie ma takiej rozmowy → 404", r.status === 404 && (await r.text()) === CONVERSATION_MESSAGES.notFound);
+  r = await del(delRequest("1"), "1");
+  const data = await r.json();
+  check("Usunięcie rozmowy 1 → 200", r.status === 200 && data.deleted === true && data.conversationId === 1);
+  check("Rozmowa 1 zniknęła z bazy razem z wiadomościami (Cascade)", !db.conversations.some((c) => c.id === 1) && !db.messages.some((m) => m.conversation_id === 1));
+  check("Rozmowa 2 bez zmian", db.conversations.some((c) => c.id === 2) && db.messages.filter((m) => m.conversation_id === 2).length === 2);
+  check("Lista /history bez usuniętej rozmowy", JSON.stringify((await store.list()).map((c) => c.id)) === "[2]");
+  r = await byIdHandler(() => store)(byIdRequest("1"), "1");
+  check("Otwarcie usuniętej rozmowy (/?c=1) → 404 (czat zacznie nową)", r.status === 404);
+  r = await del(delRequest("1"), "1");
+  check("Ponowne usunięcie → 404", r.status === 404);
+  const broken = createDeleteConversationHandler({ getSession: () => ({ secret: AUTH.secret, token: TOKEN }),
+    getStore: () => createConversationStore({ ...db.api, deleteConversation: async () => { throw new Error("Supabase (usunięcie rozmowy): 42501 permission denied"); } }) });
+  r = await silence(() => broken(delRequest("2"), "2"));
+  const body = await r.text();
+  check("Błąd bazy → 502 po polsku, bez szczegółów", r.status === 502 && body === CONVERSATION_MESSAGES.deleteError && !body.includes("42501"));
+  const none = createDeleteConversationHandler({ getSession: () => ({ secret: AUTH.secret, token: TOKEN }), getStore: () => null });
+  check("Brak konfiguracji bazy → 503", (await none(delRequest("2"), "2")).status === 503);
+  // Wysłanie wiadomości do usuniętej rozmowy → nowa rozmowa (zamiast błędu).
+  const { handle } = handler({ model: chatModel([[...textChunks("Nowa"), stop]]), store });
+  const { message } = await readChat(await handle(request({ mode: "chat", conversationId: 1, messages: [user("u1", "Po usunięciu")] })));
+  check("Wiadomość do usuniętej rozmowy → nowa rozmowa", message.metadata?.conversationId === 3 && db.conversations.some((c) => c.id === 3));
+  check("Pytanie przed usunięciem z tytułem", deleteConfirmMessage("Wycena alarmu") === "Usunąć rozmowę „Wycena alarmu”? Tej operacji nie można cofnąć.");
+}
+{
+  const calls = [];
+  const client = (result) => ({
+    from(table) {
+      const chain = { table, steps: [] };
+      calls.push(chain);
+      const builder = new Proxy({}, {
+        get(_, name) {
+          if (name === "then") return (resolve) => resolve(result);
+          return (...args) => { chain.steps.push([name, ...args]); return builder; };
+        },
+      });
+      return builder;
+    },
+  });
+  const dbOk = createSupabaseConversationDb(client({ data: [{ id: 4 }], error: null }));
+  check("Supabase: usunięcie → conversations.delete().eq(id).select(id)", (await dbOk.deleteConversation(4)) === true && calls[0].table === "conversations" &&
+    JSON.stringify(calls[0].steps) === JSON.stringify([["delete"], ["eq", "id", 4], ["select", "id"]]));
+  const dbNone = createSupabaseConversationDb(client({ data: [], error: null }));
+  check("Supabase: brak wiersza → false (404)", (await dbNone.deleteConversation(5)) === false);
+  await dbOk.updateTitle(4, "Serwis kamer CCTV");
+  check("Supabase: tytuł → conversations.update({ title }).eq(id)", JSON.stringify(calls.at(-1).steps) === JSON.stringify([["update", { title: "Serwis kamer CCTV" }], ["eq", "id", 4]]));
+}
+
+console.log("\n=== 15. Dla szybkich: strona /history (kod źródłowy) ===");
+{
+  const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
+  const page = read("app/history/page.tsx");
+  const button = read("app/history/delete-button.tsx");
+  const byId = read("app/api/conversations/[id]/route.ts");
+  const agentRoute = read("app/api/agent/route.ts");
+  check("Przycisk „Usuń” przy każdej rozmowie", page.includes("<DeleteConversationButton") && page.includes("deleteConfirmMessage(conversation.title)"));
+  check("Usuń: najpierw potwierdzenie, potem DELETE i odświeżenie listy", button.includes("window.confirm(confirmMessage)") &&
+    button.indexOf("window.confirm") < button.indexOf('method: "DELETE"') && button.includes("router.refresh()"));
+  check("Endpoint [id] ma DELETE (sesja sprawdzana w handlerze)", byId.includes("export async function DELETE") && byId.includes("createDeleteConversationHandler({ getSession"));
+  check("Pusta lista: zachęta głosem Amber + „Zacznij rozmowę”", page.includes("HISTORY_EMPTY_MESSAGE") && page.includes("Zacznij rozmowę") &&
+    HISTORY_EMPTY_MESSAGE.includes("Państwu") && /alarm|CCTV/.test(HISTORY_EMPTY_MESSAGE));
+  check("Tytuł po odpowiedzi przez after() z Next.js", agentRoute.includes('import { after } from "next/server"') && agentRoute.includes("runAfterResponse"));
 }
 
 console.log(`\nWynik: ${passed} zaliczonych, ${failed} niezaliczonych.`);

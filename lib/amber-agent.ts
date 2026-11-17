@@ -284,6 +284,9 @@ export type AgentDeps = {
   log?: (message: string) => void;
   // Lekcja 5, Warsztat 2: zapis rozmów w bazie (null / brak = bez zapisu, czat działa dalej).
   conversations?: () => ConversationStore | null;
+  // Warsztat 2 (Dla szybkich): praca po wysłaniu odpowiedzi (w aplikacji: after() z Next.js) – tytuł nowej rozmowy.
+  // Brak = bez tytułu od modelu (zostaje początek pierwszej wiadomości).
+  runAfterResponse?: (task: () => Promise<unknown>) => void;
 };
 
 // conversationId (lekcja 5) – numer rozmowy w bazie; jak stats służy tylko przeglądarce i nie wraca na serwer.
@@ -828,6 +831,24 @@ function streamChat({
         try {
           savedConversationId = await store.saveExchange({ conversationId, turns, replyText, generatedImage });
           log(`[Amber] /api/agent – zapisano w bazie (rozmowa ${savedConversationId}).`);
+          // Dla szybkich: nowa rozmowa → tytuł 3–5 słów od modelu, już po wysłaniu odpowiedzi (klient nie czeka).
+          if (savedConversationId !== conversationId && deps.runAfterResponse) {
+            const newId = savedConversationId;
+            const lastAssistant = turns.map((turn) => turn.role).lastIndexOf("assistant");
+            const firstUserText = turns.slice(lastAssistant + 1).find((turn) => turn.role === "user")?.text ?? "";
+            const titleTask = async () => {
+              const title = await store.autoTitle({ conversationId: newId, firstUserText, replyText, model: models.model });
+              log(`[Amber] /api/agent – tytuł rozmowy ${newId}: ${title ? `„${title}”` : "bez zmian (zostaje początek pierwszej wiadomości)"}`);
+            };
+            try {
+              deps.runAfterResponse(titleTask);
+            } catch (error) {
+              // Planowanie po odpowiedzi niedostępne – tytuł w tle (zapis rozmowy już się udał).
+              const details = error instanceof Error ? error.message : String(error);
+              console.warn(`[Amber] /api/agent – after() niedostępne (${details.slice(0, 120)}), tytuł w tle.`);
+              void titleTask().catch(() => {});
+            }
+          }
         } catch (error) {
           const details = error instanceof Error ? error.message : String(error);
           console.error(`[Amber] /api/agent – nie zapisano rozmowy w bazie: ${details.slice(0, 300)}`);

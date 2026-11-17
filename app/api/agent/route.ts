@@ -1,4 +1,5 @@
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
+import { after } from "next/server";
 import type { ToolSet } from "ai";
 import { SESSION_COOKIE, getAuthConfig, isSessionValid, readCookie } from "../../../lib/auth";
 import {
@@ -96,6 +97,16 @@ export async function POST(req: Request) {
     maxTextChars: MAX_USER_MESSAGE_CHARS,
     // Lekcja 5, Warsztat 2: zapis rozmów w Supabase (po sprawdzeniu sesji i po zakończeniu odpowiedzi).
     conversations: getConversationStore,
+    // Dla szybkich: tytuł nowej rozmowy od modelu – po wysłaniu odpowiedzi (after z Next.js; błąd tylko w logu).
+    runAfterResponse: (task) =>
+      after(async () => {
+        try {
+          await task();
+        } catch (error) {
+          const details = error instanceof Error ? error.message : String(error);
+          console.error(`[Amber] /api/agent – tytuł rozmowy nie zapisany: ${details.slice(0, 300)}`);
+        }
+      }),
   });
   return handle(req);
 }

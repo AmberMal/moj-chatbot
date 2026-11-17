@@ -2,12 +2,15 @@ import Link from "next/link";
 import { cookies } from "next/headers";
 import { SESSION_COOKIE, getAuthConfig, isSessionValid } from "../../lib/auth";
 import {
+  HISTORY_EMPTY_MESSAGE,
+  deleteConfirmMessage,
   formatConversationDate,
   formatMessageCount,
   type ConversationSummary,
 } from "../../lib/amber-conversations";
 import { getConversationStore } from "../../lib/supabase";
 import LoginForm from "../login-form";
+import DeleteConversationButton from "./delete-button";
 
 // Lekcja 5, Warsztat 2 (Standard): lista zapisanych rozmów – jak pasek boczny w ChatGPT.
 // Komponent serwerowy: najpierw sesja, dopiero potem odczyt z bazy (bez sesji – formularz hasła, baza nieużywana).
@@ -53,7 +56,15 @@ export default async function HistoryPage() {
               {problem}
             </p>
           )}
-          {!problem && conversations.length === 0 && <p className="hint">Nie ma jeszcze zapisanych rozmów.</p>}
+          {/* Dla szybkich: pusta lista – zachęta do pierwszej rozmowy głosem Amber */}
+          {!problem && conversations.length === 0 && (
+            <div className="history-empty">
+              <p>{HISTORY_EMPTY_MESSAGE}</p>
+              <Link href="/?new=1" className="logout">
+                Zacznij rozmowę
+              </Link>
+            </div>
+          )}
           {conversations.length > 0 && (
             <ul className="history-list">
               {conversations.map((conversation) => (
@@ -64,6 +75,12 @@ export default async function HistoryPage() {
                       {formatConversationDate(conversation.createdAt)} · {formatMessageCount(conversation.messageCount)}
                     </span>
                   </Link>
+                  {/* Dla szybkich: usunięcie rozmowy (z potwierdzeniem) */}
+                  <DeleteConversationButton
+                    id={conversation.id}
+                    title={conversation.title}
+                    confirmMessage={deleteConfirmMessage(conversation.title)}
+                  />
                 </li>
               ))}
             </ul>

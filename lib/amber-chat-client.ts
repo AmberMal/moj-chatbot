@@ -80,6 +80,8 @@ export const HISTORY_PAGE = "/history";
 export const NEW_CONVERSATION_URL = "/?new=1";
 export const conversationPageUrl = (id: number) => `/?c=${id}`;
 export const conversationApiUrl = (id: number) => `/api/conversations/${id}`;
+// Dla szybkich: komunikat, gdy usunięcie rozmowy się nie uda (przycisk „Usuń” na /history).
+export const DELETE_ERROR_MESSAGE = "Nie udało się usunąć rozmowy. Spróbuj ponownie.";
 
 export type ConversationTarget = { kind: "new" } | { kind: "id"; id: number } | { kind: "latest" };
 
