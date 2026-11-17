@@ -24,7 +24,7 @@ import {
 } from "../lib/amber-agent.ts";
 import { MockImageModelV4 } from "ai/test";
 import { IMAGE_MODEL_ID, createImageTool } from "../lib/amber-image.ts";
-import { buildStepList, formatAgentStats, formatStepList, prepareAgentMessages, STEP_LIMIT_MESSAGE } from "../lib/amber-chat-client.ts";
+import { buildStepList, formatAgentStats, formatStepList, markStoppedQuestion, prepareAgentMessages, STEP_LIMIT_MESSAGE, STOPPED_TASK_NOTE } from "../lib/amber-chat-client.ts";
 import { SESSION_COOKIE, createSessionToken, isSessionValid, readCookie } from "../lib/auth.ts";
 import { AMBER_ANALYZE_INSTRUCTIONS, AMBER_CHAT_INSTRUCTIONS, AMBER_CHAT_INSTRUCTIONS_DEV } from "../lib/amber-instructions.ts";
 import { generateAmberOutput } from "../lib/amber-output.ts";
@@ -1330,6 +1330,138 @@ console.log("\n=== 16. Warsztat 2 – Standard: 16 wywołań, 60 s zadania, 10 s
   // Instrukcja
   check("Instrukcja: przy błędzie – co nie zostało sprawdzone, bez ponawiania, wynik częściowy",
     AMBER_CHAT_INSTRUCTIONS.includes("napisz klientowi wprost, czego nie udało się sprawdzić") && AMBER_CHAT_INSTRUCTIONS.includes("Nie wywołuj ponownie tego samego narzędzia z tymi samymi danymi po błędzie") && AMBER_CHAT_INSTRUCTIONS.includes("(wynik częściowy)") && AMBER_CHAT_INSTRUCTIONS.includes("„Źródło nie odpowiada”"));
+}
+
+console.log("\n=== 17. Warsztat 2 – Fast: Stop (przerwanie przez użytkownika) ===");
+{
+  const logs = [];
+  const fastHandler = (model, tools, extra = {}) => createAgentHandler({
+    getSession: () => ({ secret: AUTH.secret, token: TOKEN }),
+    createModels: () => ({ model, tools }),
+    instructions: { chat: AMBER_CHAT_INSTRUCTIONS, analyze: AMBER_ANALYZE_INSTRUCTIONS },
+    history: { deriveHistoryKey, sessionIdFromToken, checkChatHistory, signAgentChatTurn },
+    generateAmberOutput, maxTextChars: MAX_USER_MESSAGE_CHARS, maxRetries: 0, now: () => NOW, log: (m) => logs.push(m),
+    ...extra,
+  });
+  const stopRequest = (messages, signal) => new Request("http://localhost/api/agent", { method: "POST", headers: { "content-type": "application/json", cookie: COOKIE }, body: JSON.stringify({ mode: "chat", messages }), signal });
+  const readSafe = async (res) => { try { return await res.text(); } catch { return ""; } };
+
+  // Stop w trakcie działania narzędzia: narzędzie dostaje sygnał przerwania, model nie robi kolejnego kroku.
+  {
+    let aborted = false;
+    const wolne = tool({
+      description: "Testowe wolne narzędzie (2 s) – tylko do testów automatycznych przycisku Stop.",
+      inputSchema: jsonSchema({ type: "object", properties: {}, additionalProperties: false }),
+      execute: async (_i, { abortSignal } = {}) => new Promise((resolve) => {
+        const t = setTimeout(() => resolve({ ok: true }), 2_000);
+        abortSignal?.addEventListener("abort", () => { clearTimeout(t); aborted = true; resolve({ ok: false, komunikat: "przerwano" }); });
+      }),
+    });
+    const model = chatModel([[call("s1", "czas", {}), toolCallsFinish], [...textChunks("Nie powinno się pojawić."), stop]]);
+    const controller = new AbortController();
+    const t0 = Date.now();
+    const res = await fastHandler(model, { czas: wolne })(stopRequest([user("u1", "Która godzina?")], controller.signal));
+    setTimeout(() => controller.abort(), 80);
+    const raw = await readSafe(res);
+    await new Promise((r) => setTimeout(r, 50));
+    check("Stop w trakcie narzędzia: narzędzie przerwane, bez kolejnego kroku modelu", aborted && model.doStreamCalls.length === 1 && Date.now() - t0 < 1500, `kroki: ${model.doStreamCalls.length}, przerwane: ${aborted}`);
+    check("Stop: odpowiedź bez podpisu i bez liczników (nie trafia do historii)", !raw.includes('"sig"') && !raw.includes('"stats"'));
+    check("Stop: wpis w logu serwera „przerwane przez użytkownika” z licznikami", logs.some((l) => /przerwane przez użytkownika \(kroki modelu: 1, wywołania narzędzi: 1, czas: \d+ ms\)/.test(l)), JSON.stringify(logs.slice(-2)));
+  }
+  // Stop w trakcie pisania tekstu – model przerwany.
+  {
+    logs.length = 0;
+    const controller = new AbortController();
+    let modelAborted = false;
+    const model = new MockLanguageModelV4({
+      doStream: async ({ abortSignal }) => ({
+        stream: new ReadableStream({
+          start(c) {
+            c.enqueue({ type: "response-metadata", id: "r", modelId: "m", timestamp: new Date(0) });
+            c.enqueue({ type: "text-start", id: "w" });
+            c.enqueue({ type: "text-delta", id: "w", delta: "Częściowa odpowiedź" });
+            abortSignal?.addEventListener("abort", () => { modelAborted = true; c.error(new DOMException("aborted", "AbortError")); });
+          },
+        }),
+      }),
+    });
+    const res = await fastHandler(model, { czas })(stopRequest([user("u1", "Opowiedz o alarmach")], controller.signal));
+    setTimeout(() => controller.abort(), 60);
+    await readSafe(res);
+    await new Promise((r) => setTimeout(r, 50));
+    check("Stop w trakcie tekstu: model przerwany", modelAborted && logs.some((l) => l.includes("przerwane przez użytkownika (kroki modelu: 1, wywołania narzędzi: 0")), JSON.stringify(logs));
+    check("Stop: nie jest traktowany jak limit 60 s (bez „Przerwałam zadanie po…”)", !logs.some((l) => l.includes("Przerwałam zadanie")));
+  }
+  // Po przerwaniu: kolejna wiadomość działa (częściowa odpowiedź bez podpisu nie wraca w historii).
+  {
+    const partial = { id: "a1", role: "assistant", parts: [{ type: "step-start" }, { type: "text", text: "Częściowa odpowiedź" }] };
+    const next = await fastHandler(chatModel([[...textChunks("Proszę zapytać ponownie."), stop]]), { czas })(request({ mode: "chat", messages: prepareAgentMessages([user("u1", "Opowiedz o alarmach"), partial, user("u2", "Jednak krócej")]) }));
+    const { message, stats } = await readChat(next);
+    check("Po Stop: następna wiadomość → 200, odpowiedź podpisana, liczniki działają", next.status === 200 && typeof message.metadata?.sig === "string" && stats?.kroki === 1);
+    const w = console.warn; console.warn = () => {};
+    const forged = await fastHandler(chatModel([[...textChunks("x"), stop]]), { czas })(request({ mode: "chat", messages: [user("u1", "Opowiedz o alarmach"), { ...partial, metadata: { kind: "chat", sig: "falszywy" } }, user("u2", "Dalej")] }));
+    console.warn = w;
+    check("Częściowa odpowiedź z dopisanym podpisem → 400 (HMAC bez zmian)", forged.status === 400);
+  }
+}
+
+console.log("\n=== 18. Warsztat 2 – Fast: przerwane zadanie nie wraca samo (notatka w historii, zgodność HMAC) ===");
+{
+  const flowHandler = (model) => createAgentHandler({
+    getSession: () => ({ secret: AUTH.secret, token: TOKEN }),
+    createModels: () => ({ model, tools: { pogoda: createWeatherTool({ fetch: API_FETCH, now }), waluty: createCurrencyTool({ fetch: API_FETCH, now }), czas } }),
+    instructions: { chat: AMBER_CHAT_INSTRUCTIONS, analyze: AMBER_ANALYZE_INSTRUCTIONS },
+    history: { deriveHistoryKey, sessionIdFromToken, checkChatHistory, signAgentChatTurn },
+    generateAmberOutput, maxTextChars: MAX_USER_MESSAGE_CHARS, maxRetries: 0, now: () => NOW, log: () => {},
+  });
+  const send = (model, messages) => flowHandler(model)(request({ mode: "chat", messages: prepareAgentMessages(messages) }));
+  const userText = (prompt) => prompt.filter((m) => m.role === "user").map((m) => (typeof m.content === "string" ? m.content : m.content.map((c) => c.text ?? "").join("")));
+
+  // Tura 1: pytanie o pogodę – przerwane Stop (częściowa odpowiedź bez podpisu, pytanie oznaczone).
+  const u1 = user("u1", "Jaka jest pogoda w Londynie, Paryżu i Berlinie jutro i ile to 100 GBP w złotówkach?");
+  const partial = { id: "a1", role: "assistant", parts: [{ type: "step-start" }, { type: "tool-czas", toolCallId: "c1", state: "output-available", input: {}, output: { ok: true } }] };
+  let conv = markStoppedQuestion([u1, partial], "u1");
+
+  // Tura 2: niezwiązane pytanie.
+  const u2 = user("u2", "Ile kosztuje alarm?");
+  const m2 = chatModel([[...textChunks("Czy chodzi o alarm przeciwwłamaniowy czy przeciwpożarowy?"), stop]]);
+  const r2 = await send(m2, [...conv, u2]);
+  const { message: a2, stats: s2 } = await readChat(r2);
+  const p2 = m2.doStreamCalls[0].prompt;
+  const users2 = userText(p2);
+  check("Po Stop: następna wiadomość → 200, odpowiedź podpisana", r2.status === 200 && typeof a2.metadata?.sig === "string");
+  check("Model dostał przerwane pytanie z notatką i nowe pytanie bez notatki",
+    users2.length === 2 && users2[0].endsWith("w złotówkach?\n\n" + STOPPED_TASK_NOTE) && users2[1] === "Ile kosztuje alarm?", JSON.stringify(users2));
+  check("Model dostał zasadę: nie wracaj sam do przerwanego zadania", JSON.stringify(p2.filter((m) => m.role === "system")).includes("Nie wykonuj go ponownie i nie wracaj do niego z własnej inicjatywy"));
+  check("Niezwiązane pytanie: bez narzędzi (0 wywołań, 1 krok)", s2?.narzedzia === 0 && s2?.kroki === 1, JSON.stringify(s2));
+  conv = [...conv, u2, a2];
+
+  // Tura 3: wyraźna prośba o wznowienie – narzędzia dostępne, kontekst (pytanie z notatką) zachowany.
+  const u3 = user("u3", "Dokończ proszę przerwane sprawdzanie pogody i kursu funta.");
+  const m3 = chatModel([
+    [call("w1", "pogoda", { miasto: "Londyn", data: "2026-11-13" }), call("w2", "waluty", { waluta: "GBP", kwota: 100 }), toolCallsFinish],
+    [...textChunks("Londyn: deszcz. 100 GBP = 512,34 zł."), stop],
+  ]);
+  const r3 = await send(m3, [...conv, u3]);
+  const { message: a3, stats: s3 } = await readChat(r3);
+  const users3 = userText(m3.doStreamCalls[0].prompt);
+  check("Wznowienie na prośbę: 200 – podpis odpowiedzi z tury 2 (obejmujący pytanie z notatką) przyjęty (HMAC)", r3.status === 200 && typeof a3.metadata?.sig === "string");
+  check("Wznowienie: model widzi przerwane pytanie z notatką (kontekst) i prośbę", users3.length === 3 && users3[0].endsWith(STOPPED_TASK_NOTE) && users3[2].startsWith("Dokończ proszę"));
+  check("Wznowienie: narzędzia dostępne i wykonane (pogoda, waluty)", m3.doStreamCalls[0].toolChoice?.type !== "none" && s3?.narzedzia === 2 && JSON.stringify(a3.metadata?.tools) === '["pogoda","waluty"]', JSON.stringify(a3.metadata?.tools));
+  conv = [...conv, u3, a3];
+
+  // Tura 4: dalsza rozmowa – oba podpisy nadal pasują.
+  const r4 = await send(chatModel([[...textChunks("Proszę bardzo."), stop]]), [...conv, user("u4", "Dziękuję")]);
+  check("Kolejna tura: 200 (podpisy obu odpowiedzi zgodne)", r4.status === 200);
+
+  // Notatka usunięta z historii (np. ręczna zmiana) → podpis się nie zgadza → 400.
+  const tampered = prepareAgentMessages([...conv, user("u4", "Dziękuję")]);
+  const q = tampered.find((m) => m.id === "u1");
+  q.parts = q.parts.filter((p) => !(p.type === "text" && p.text.includes(STOPPED_TASK_NOTE)));
+  const w = console.warn; console.warn = () => {};
+  const r5 = await flowHandler(chatModel([[...textChunks("x"), stop]]))(request({ mode: "chat", messages: tampered }));
+  console.warn = w;
+  check("Historia bez notatki (zmieniona) → 400 (podpis HMAC)", r5.status === 400);
 }
 
 console.log(`\nWynik: ${passed} zaliczonych, ${failed} niezaliczonych.`);

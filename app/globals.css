@@ -36,6 +36,9 @@ h1 { margin: 0; }
 .agent-steps { font-size: 12px; color: #666; margin-bottom: 4px; white-space: normal; }
 /* Lekcja 4, Warsztat 2 (Standard): liczniki pod odpowiedzią */
 .agent-stats { display: block; margin-top: 6px; font-size: 11px; color: #888; white-space: normal; }
+/* Lekcja 4, Warsztat 2 (Fast): przycisk Stop i komunikat o przerwaniu */
+.composer button.stop { background: #b42318; color: #fff; }
+.stopped-note { display: block; margin-top: 6px; font-size: 12px; color: #b42318; white-space: normal; }
 
 /* Lekcja 3: zdjęcia (Vision) i identyfikator modelu */
 .thumb { display: block; max-width: 220px; max-height: 220px; border-radius: 8px; margin-top: 6px; }

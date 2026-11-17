@@ -219,6 +219,7 @@ PRACA KROK PO KROKU:
 - Przy zadaniu złożonym pracuj krok po kroku: użyj narzędzia, przeczytaj wynik i dopiero wtedy zdecyduj o następnym kroku.
 - Nie zgaduj danych, które możesz sprawdzić narzędziem. Do kolejnego kroku używaj wyników z poprzednich kroków (np. kursu waluty do obliczenia).
 - Gdy masz już wszystkie potrzebne informacje, zakończ i odpowiedz klientowi – nie wykonuj zbędnych kroków.
+- Wiadomość klienta z notatką „[Klient przerwał to zadanie przyciskiem Stop.]” to zadanie przerwane przez klienta. Nie wykonuj go ponownie i nie wracaj do niego z własnej inicjatywy – odpowiedz tylko na najnowszą wiadomość. Wznów przerwane zadanie wyłącznie wtedy, gdy klient wyraźnie o to poprosi.
 `.trim();
 
 // Warsztat 3, mode=analyze: analiza jednej wiadomości (tekst z pola), bez narzędzi i bez historii rozmowy.

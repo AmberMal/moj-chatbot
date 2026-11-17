@@ -24,14 +24,18 @@ function hasSignature(message: UIMessage): boolean {
 //    i nie trafiają do modelu). Zostaje tylko część obrazu. Rozmowa w przeglądarce wygląda tak samo.
 // 5. (lekcja 4, Warsztat 2 Standard) liczniki pod odpowiedzią (metadata.stats) NIE wracają na serwer –
 //    służą tylko do wyświetlenia i nie są podpisane (serwer odrzuciłby historię z tym polem).
+// 6. (lekcja 4, Warsztat 2 Fast) pytanie, którego zadanie przerwano przyciskiem Stop (metadata.przerwane),
+//    dostaje na końcu notatkę STOPPED_TASK_NOTE – model wie, że zadanie przerwano i nie wykonuje go sam ponownie.
+//    Zawsze ta sama notatka → podpisy kolejnych odpowiedzi (obejmujące to pytanie) pozostają zgodne.
 export function prepareAgentMessages(messages: UIMessage[]): UIMessage[] {
   const signed = messages.filter((message) => message.role !== "assistant" || hasSignature(message));
   const lastAssistant = signed.map((message) => message.role).lastIndexOf("assistant");
   return signed.map((message, index) => {
     if (message.role === "user") {
-      if (index > lastAssistant) return message;
-      const parts = message.parts.filter((part) => part.type !== "file");
-      return { ...message, parts: parts.length > 0 ? parts : [{ type: "text" as const, text: "" }] };
+      const user = withStoppedTaskNote(message);
+      if (index > lastAssistant) return user;
+      const parts = user.parts.filter((part) => part.type !== "file");
+      return { ...user, parts: parts.length > 0 ? parts : [{ type: "text" as const, text: "" }] };
     }
     const parts = message.parts
       .filter((part) => !part.type.startsWith("tool-") || part.type === "tool-generujObraz")
@@ -71,6 +75,72 @@ export function formatAgentStats(metadata: unknown): string | null {
   if (!isCount(kroki) || !isCount(narzedzia) || !isCount(czasMs)) return null;
   const seconds = (czasMs / 1000).toLocaleString("pl-PL", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
   return `Kroki modelu: ${kroki} · Wywołania narzędzi: ${narzedzia} · Czas: ${seconds} s`;
+}
+
+// Lekcja 4, Warsztat 2 (Fast): notatka dopisywana w historii do pytania, którego zadanie przerwano przyciskiem Stop.
+export const STOPPED_TASK_NOTE = "[Klient przerwał to zadanie przyciskiem Stop.]";
+// Taki sam limit jak MAX_USER_MESSAGE_CHARS w lib/amber-history.ts (sprawdza to test).
+export const MAX_HISTORY_USER_TEXT_CHARS = 4000;
+const STOPPED_TASK_SUFFIX = `\n\n${STOPPED_TASK_NOTE}`;
+
+// Oznaczenie pytania (wiadomości klienta), którego zadanie przerwano – zapisane w samej wiadomości,
+// żeby każda kolejna historia dostała notatkę w tej samej postaci.
+export function markStoppedQuestion(messages: UIMessage[], questionId: string): UIMessage[] {
+  return messages.map((message) =>
+    message.id === questionId && message.role === "user"
+      ? { ...message, metadata: { ...(isRecord(message.metadata) ? message.metadata : {}), przerwane: true } }
+      : message,
+  );
+}
+
+// Pytanie, którego dotyczyło przerwane zadanie: ostatnia wiadomość klienta.
+export function stoppedQuestionId(messages: UIMessage[]): string | null {
+  return [...messages].reverse().find((m) => m.role === "user")?.id ?? null;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+// Kopia oznaczonego pytania do historii: bez pola „przerwane”, z notatką na końcu (w limicie znaków).
+function withStoppedTaskNote(message: UIMessage): UIMessage {
+  if (!isRecord(message.metadata) || message.metadata.przerwane !== true) return message;
+  const { przerwane: _przerwane, ...rest } = message.metadata;
+  const base = Object.keys(rest).length > 0 ? { ...message, metadata: rest } : { ...message, metadata: undefined };
+  if (base.metadata === undefined) delete (base as { metadata?: unknown }).metadata;
+  const textParts = message.parts.filter((part) => part.type === "text");
+  const text = textParts.map((part) => (part as { text: string }).text).join("");
+  const room = MAX_HISTORY_USER_TEXT_CHARS - STOPPED_TASK_SUFFIX.length;
+  if (text.length <= room) {
+    return { ...base, parts: [...message.parts, { type: "text" as const, text: STOPPED_TASK_SUFFIX }] } as UIMessage;
+  }
+  // Bardzo długie pytanie: skrócone tak, żeby razem z notatką zmieściło się w limicie (zawsze tak samo).
+  const others = message.parts.filter((part) => part.type !== "text");
+  return {
+    ...base,
+    parts: [...others, { type: "text" as const, text: `${text.slice(0, room - 1)}…` }, { type: "text" as const, text: STOPPED_TASK_SUFFIX }],
+  } as UIMessage;
+}
+
+// Lekcja 4, Warsztat 2 (Fast): przycisk „Stop” – widoczny tylko wtedy, gdy agent wykonuje zadanie.
+// Po kliknięciu useChat przerywa zapytanie (fetch), a serwer przez req.signal przerywa model i narzędzia.
+// Częściowa odpowiedź zostaje w rozmowie z komunikatem poniżej. Nie ma podpisu, więc – jak każda
+// niepodpisana odpowiedź – nie wraca do serwera w historii (patrz punkt 1 wyżej).
+export const STOPPED_MESSAGE = "Przerwane przez użytkownika";
+
+export function canStop(status: string): boolean {
+  return status === "submitted" || status === "streaming";
+}
+
+// Gdzie pokazać komunikat po przerwaniu: pod częściową odpowiedzią Amber, a gdy odpowiedź jeszcze się
+// nie pojawiła (Stop zaraz po wysłaniu) – pod ostatnią wiadomością klienta.
+export function stopNoteTarget(
+  message: UIMessage | undefined,
+  messages: UIMessage[],
+): { kind: "assistant" | "user"; id: string } | null {
+  if (message?.role === "assistant" && messages.some((m) => m.id === message.id)) return { kind: "assistant", id: message.id };
+  const lastUser = [...messages].reverse().find((m) => m.role === "user");
+  return lastUser ? { kind: "user", id: lastUser.id } : null;
 }
 
 // Limit kroków: model zakończył na wywołaniu narzędzia (stopWhen: isStepCount(6)).

@@ -10,12 +10,17 @@ import {
   MAX_IMAGE_DESCRIPTION_CHARS,
   NO_IMAGE_MESSAGE,
   STEP_LIMIT_MESSAGE,
+  STOPPED_MESSAGE,
   buildStepList,
+  canStop,
   formatAgentStats,
   formatStepList,
   buildImageRequest,
   hasImageToolPart,
   hasVisibleContent,
+  markStoppedQuestion,
+  stopNoteTarget,
+  stoppedQuestionId,
   imageDownloadName,
   isStepLimit,
   prepareAgentMessages,
@@ -118,12 +123,26 @@ export default function Chat() {
   const isAnalyzing = analyses.some((item) => item.status === "loading");
   // Odpowiedzi zatrzymane limitem 5 kroków (komunikat pod odpowiedzią).
   const [stepLimitIds, setStepLimitIds] = useState<string[]>([]);
+  // Lekcja 4, Warsztat 2 (Fast): odpowiedzi przerwane przyciskiem „Stop” (komunikat pod częściowym wynikiem)
+  // i pytania, po których Stop kliknięto, zanim pojawiła się odpowiedź.
+  const [stoppedIds, setStoppedIds] = useState<string[]>([]);
+  const [stoppedAfterIds, setStoppedAfterIds] = useState<string[]>([]);
+  // Oznaczenie przerwanego pytania w stanie czatu (setMessages z useChat – dostępne dopiero po wywołaniu hooka).
+  const setMessagesRef = useRef<((update: (messages: UIMessage[]) => UIMessage[]) => void) | null>(null);
   // useChat wysyła historię rozmowy do /api/agent (mode=chat) i odbiera odpowiedź strumieniowo.
-  const { messages, sendMessage, status, error, clearError, stop } = useChat({
+  const { messages, sendMessage, status, error, clearError, stop, setMessages } = useChat({
     transport,
-    onFinish: ({ message, finishReason, isError }) => {
+    onFinish: ({ message, messages: all, finishReason, isError, isAbort }) => {
+      if (isAbort) {
+        const target = stopNoteTarget(message, all);
+        if (target?.kind === "assistant") setStoppedIds((ids) => [...ids, target.id]);
+        if (target?.kind === "user") setStoppedAfterIds((ids) => [...ids, target.id]);
+        // Pytanie przerwanego zadania dostaje znacznik → w historii notatka STOPPED_TASK_NOTE (lib/amber-chat-client.ts).
+        const questionId = stoppedQuestionId(all);
+        if (questionId) setMessagesRef.current?.((current) => markStoppedQuestion(current, questionId));
+      }
       if (isStepLimit(finishReason)) setStepLimitIds((ids) => [...ids, message.id]);
-      if (imageRequestRef.current && !isError && !hasImageToolPart(message)) {
+      if (imageRequestRef.current && !isError && !isAbort && !hasImageToolPart(message)) {
         setNoImageIds((ids) => [...ids, message.id]);
       }
       imageRequestRef.current = false;
@@ -135,6 +154,7 @@ export default function Chat() {
     },
   });
 
+  setMessagesRef.current = setMessages;
   const isBusy = status === "submitted" || status === "streaming";
   const isGenerating = imageRequestPending && isBusy;
   // „Model pisze…” – od wysłania aż do pojawienia się pierwszej treści odpowiedzi (bez pustego dymka).
@@ -300,7 +320,7 @@ export default function Chat() {
             ? meta.tools.filter((name) => name in TOOL_LABELS).map((name) => TOOL_LABELS[name])
             : [];
           // Odpowiedź Amber bez treści (model dopiero zaczyna albo używa narzędzia) – bez pustego dymka.
-          if (message.role === "assistant" && !hasVisibleContent(message)) {
+          if (message.role === "assistant" && !hasVisibleContent(message) && !stoppedIds.includes(message.id)) {
             return <Fragment key={message.id}>{analysesAfter(index + 1)}</Fragment>;
           }
           return (
@@ -376,6 +396,9 @@ export default function Chat() {
               {message.role === "assistant" && formatAgentStats(message.metadata) && (
                 <small className="agent-stats">{formatAgentStats(message.metadata)}</small>
               )}
+              {message.role === "assistant" && stoppedIds.includes(message.id) && (
+                <small className="stopped-note">⏹ {STOPPED_MESSAGE}</small>
+              )}
               {message.role === "assistant" && noImageIds.includes(message.id) && (
                 <small className="image-error step-limit">{NO_IMAGE_MESSAGE}</small>
               )}
@@ -385,6 +408,11 @@ export default function Chat() {
                 <small className="step-limit">⚠️ {STEP_LIMIT_MESSAGE}</small>
               )}
             </div>
+            {message.role === "user" && stoppedAfterIds.includes(message.id) && (
+              <div className="message assistant">
+                <small className="stopped-note">⏹ {STOPPED_MESSAGE}</small>
+              </div>
+            )}
             {analysesAfter(index + 1)}
             </Fragment>
           );
@@ -444,6 +472,12 @@ export default function Chat() {
         <button type="submit" disabled={!canSend}>
           {isBusy ? "Czekaj…" : "Wyślij"}
         </button>
+        {/* Lekcja 4, Warsztat 2 (Fast): Stop – tylko gdy agent wykonuje zadanie. */}
+        {canStop(status) && (
+          <button type="button" className="stop" onClick={() => stop()}>
+            Stop
+          </button>
+        )}
         <button type="button" className="secondary" disabled={!canGenerate} onClick={handleGenerateImage}>
           {isGenerating ? "Generuję…" : "Wygeneruj obraz"}
         </button>

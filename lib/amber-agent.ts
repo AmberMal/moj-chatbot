@@ -714,6 +714,11 @@ function streamChat({
       // Przekroczony limit 60 s (a nie zamknięcie karty przez klienta).
       const timedOut = taskController.signal.aborted && !req.signal.aborted;
 
+      // Lekcja 4, Warsztat 2 (Fast): przycisk „Stop” w przeglądarce przerywa zapytanie → req.signal przerywa model
+      // i narzędzia. Połączenie jest już zamknięte, więc nic więcej nie wysyłamy – tylko wpis w logu serwera.
+      if (req.signal.aborted) {
+        log(`[Amber] /api/agent – przerwane przez użytkownika (kroki modelu: ${modelSteps}, wywołania narzędzi: ${guard.executed}, czas: ${elapsed()} ms)`);
+      }
       // Bez podpisu, gdy odpowiedź jest niepełna (błąd lub przerwanie przez klienta) – takiej odpowiedzi nie da się użyć w historii.
       if ((hadError && !timedOut) || req.signal.aborted) {
         writer.write({ type: "finish", finishReason: "error" });

@@ -7,7 +7,14 @@ import {
   IMAGE_REQUEST_PREFIX,
   MAX_IMAGE_DESCRIPTION_CHARS,
   STEP_LIMIT_MESSAGE,
+  STOPPED_MESSAGE,
+  STOPPED_TASK_NOTE,
+  MAX_HISTORY_USER_TEXT_CHARS,
+  markStoppedQuestion,
+  stoppedQuestionId,
   buildImageRequest,
+  canStop,
+  stopNoteTarget,
   hasImageToolPart,
   hasVisibleContent,
   imageDownloadName,
@@ -16,6 +23,9 @@ import {
   readAnalysisResponse,
   readGeneratedImagePart,
 } from "../lib/amber-chat-client.ts";
+import { readFileSync } from "node:fs";
+import { MAX_USER_MESSAGE_CHARS } from "../lib/amber-history.ts";
+import { AMBER_CHAT_INSTRUCTIONS, AMBER_ANALYZE_INSTRUCTIONS } from "../lib/amber-instructions.ts";
 
 let passed = 0;
 let failed = 0;
@@ -116,6 +126,68 @@ console.log("\n=== Etap 4: bez pustego dymka ===");
   check("Pierwsze słowa odpowiedzi → dymek widoczny", hasVisibleContent(msg([{ type: "text", text: "Dzień" }])));
   check("Generowanie obrazu (w trakcie) → dymek z „Generuję obraz…”", hasVisibleContent(msg([{ type: "tool-generujObraz", toolCallId: "c", state: "input-available" }])));
   check("Same źródła → dymek widoczny", hasVisibleContent(msg([{ type: "source-url", sourceId: "s", url: "https://example.org" }])));
+}
+
+console.log("\n=== Lekcja 4, Warsztat 2 (Fast): przycisk Stop ===");
+{
+  check("Komunikat dokładnie „Przerwane przez użytkownika”", STOPPED_MESSAGE === "Przerwane przez użytkownika");
+  check("Stop widoczny tylko, gdy agent pracuje (submitted, streaming)", canStop("submitted") && canStop("streaming") && !canStop("ready") && !canStop("error"));
+  const u1 = userMsg("u1", "Pogoda w Londynie?");
+  const partial = { id: "a1", role: "assistant", parts: [{ type: "step-start" }, { type: "tool-pogoda", toolCallId: "c1", state: "input-available", input: { miasto: "Londyn" } }, { type: "text", text: "Sprawdzam pogo" }] };
+  check("Komunikat pod częściową odpowiedzią Amber", JSON.stringify(stopNoteTarget(partial, [u1, partial])) === '{"kind":"assistant","id":"a1"}');
+  check("Stop przed pierwszą treścią (odpowiedzi nie ma w rozmowie) → komunikat pod pytaniem klienta", JSON.stringify(stopNoteTarget({ id: "nowa", role: "assistant", parts: [] }, [signed("a0", "Dzień dobry"), u1])) === '{"kind":"user","id":"u1"}');
+  check("Brak wiadomości → bez komunikatu", stopNoteTarget(undefined, []) === null);
+  const history = prepareAgentMessages([u1, partial, userMsg("u2", "A jutro?")]);
+  check("Częściowa (niepodpisana) odpowiedź nie wraca do serwera w historii", history.length === 2 && history.every((m) => m.role === "user") && !JSON.stringify(history).includes("Sprawdzam pogo"));
+  const kept = prepareAgentMessages([userMsg("u0", "x"), signed("a0", "Odpowiedź"), u1, partial, userMsg("u2", "y")]);
+  check("Wcześniejsze podpisane odpowiedzi zostają w historii", kept.length === 4 && kept[1].id === "a0");
+
+  const ui = readFileSync(new URL("../app/chat.tsx", import.meta.url), "utf8");
+  const css = readFileSync(new URL("../app/globals.css", import.meta.url), "utf8");
+  check("Czat: przycisk Stop tylko przy canStop(status), wywołuje stop() z useChat", /\{canStop\(status\) && \(\s*<button type="button" className="stop" onClick=\{\(\) => stop\(\)\}>\s*Stop\s*<\/button>/.test(ui) && /const \{ messages, sendMessage, status, error, clearError, stop, setMessages \} = useChat\(/.test(ui));
+  check("Czat: onFinish z isAbort zapisuje, gdzie pokazać komunikat", ui.includes("if (isAbort) {") && ui.includes("stopNoteTarget(message, all)"));
+  check("Czat: komunikat pod częściową odpowiedzią i pod pytaniem (gdy brak odpowiedzi)", (ui.match(/<small className="stopped-note">⏹ \{STOPPED_MESSAGE\}<\/small>/g) ?? []).length === 2);
+  check("Czat: przerwana odpowiedź bez treści nadal widoczna (z komunikatem)", ui.includes("!hasVisibleContent(message) && !stoppedIds.includes(message.id)"));
+  check("Czat: po przerwaniu prośby o obraz bez komunikatu „model nie wygenerował obrazu”", ui.includes("!isError && !isAbort && !hasImageToolPart(message)"));
+  check("Style: przycisk Stop i komunikat", /\.composer button\.stop \{/.test(css) && /\.stopped-note \{/.test(css));
+}
+
+console.log("\n=== Lekcja 4, Warsztat 2 (Fast): notatka przy przerwanym pytaniu (rozwiązanie 2) ===");
+{
+  check("Notatka dokładnie „[Klient przerwał to zadanie przyciskiem Stop.]”", STOPPED_TASK_NOTE === "[Klient przerwał to zadanie przyciskiem Stop.]");
+  check("Limit tekstu w historii = limit serwera (4000)", MAX_HISTORY_USER_TEXT_CHARS === MAX_USER_MESSAGE_CHARS);
+  const u0 = userMsg("u0", "Dzień dobry");
+  const a0 = signed("a0", "Dzień dobry, w czym mogę pomóc?");
+  const u1 = userMsg("u1", "Pogoda w Londynie, Paryżu i Berlinie?");
+  const partial = { id: "a1", role: "assistant", parts: [{ type: "step-start" }, { type: "tool-pogoda", toolCallId: "c1", state: "input-available", input: { miasto: "Londyn" } }] };
+  const u2 = userMsg("u2", "Ile kosztuje alarm?");
+  check("Pytanie przerwanego zadania = ostatnia wiadomość klienta", stoppedQuestionId([u0, a0, u1, partial]) === "u1" && stoppedQuestionId([u0, a0, u1]) === "u1" && stoppedQuestionId([]) === null);
+  const marked = markStoppedQuestion([u0, a0, u1, partial], "u1");
+  check("Oznaczenie tylko przerwanego pytania (metadata.przerwane), inne bez zmian", marked[2].metadata?.przerwane === true && marked[0] === u0 && marked[1] === a0 && marked[3] === partial);
+  check("Oznaczenie nie zmienia treści pytania na ekranie", JSON.stringify(marked[2].parts) === JSON.stringify(u1.parts));
+  const sent = prepareAgentMessages([...marked, u2]);
+  const q = sent.find((m) => m.id === "u1");
+  const qText = q.parts.filter((p) => p.type === "text").map((p) => p.text).join("");
+  check("Historia: notatka na końcu przerwanego pytania", qText === "Pogoda w Londynie, Paryżu i Berlinie?\n\n[Klient przerwał to zadanie przyciskiem Stop.]", JSON.stringify(qText));
+  check("Historia: pole „przerwane” nie trafia na serwer", !("metadata" in q) || !("przerwane" in (q.metadata ?? {})));
+  check("Historia: częściowa odpowiedź pominięta, inne pytania bez notatki", !sent.some((m) => m.id === "a1") && !JSON.stringify(sent.filter((m) => m.id !== "u1")).includes("przerwał"));
+  check("Historia: za każdym razem identyczna (zgodność podpisów)", JSON.stringify(prepareAgentMessages([...marked, u2])) === JSON.stringify(sent));
+  const errored = prepareAgentMessages([u0, a0, u1, { id: "a1", role: "assistant", parts: [{ type: "text", text: "Częściowo" }] }, u2]);
+  check("Odpowiedź bez podpisu po błędzie (bez Stop) → bez notatki", !JSON.stringify(errored).includes("przerwał"));
+  const long = markStoppedQuestion([userMsg("L", "x".repeat(4000))], "L");
+  const longText = prepareAgentMessages(long)[0].parts.filter((p) => p.type === "text").map((p) => p.text).join("");
+  check("Bardzo długie pytanie: z notatką mieści się w 4000 znaków", longText.length <= 4000 && longText.endsWith(STOPPED_TASK_NOTE), String(longText.length));
+  const withPhoto = markStoppedQuestion([userMsg("P", "Co to za alarm?", PHOTO)], "P");
+  const ph = prepareAgentMessages(withPhoto)[0];
+  check("Przerwane pytanie ze zdjęciem: zdjęcie zostaje, notatka dopisana", ph.parts.some((p) => p.type === "file") && ph.parts.at(-1).text.endsWith(STOPPED_TASK_NOTE));
+
+  const ui = readFileSync(new URL("../app/chat.tsx", import.meta.url), "utf8");
+  check("Czat: po Stop oznaczenie pytania przez setMessages", ui.includes("const questionId = stoppedQuestionId(all);") && ui.includes("markStoppedQuestion(current, questionId)") && ui.includes("setMessagesRef.current = setMessages;"));
+  check("Instrukcja: nie wracaj sam do przerwanych zadań, wznów tylko na wyraźną prośbę",
+    AMBER_CHAT_INSTRUCTIONS.includes("Wiadomość klienta z notatką „[Klient przerwał to zadanie przyciskiem Stop.]” to zadanie przerwane przez klienta.") &&
+    AMBER_CHAT_INSTRUCTIONS.includes("Nie wykonuj go ponownie i nie wracaj do niego z własnej inicjatywy") &&
+    AMBER_CHAT_INSTRUCTIONS.includes("Wznów przerwane zadanie wyłącznie wtedy, gdy klient wyraźnie o to poprosi.") &&
+    !AMBER_ANALYZE_INSTRUCTIONS.includes("przyciskiem Stop"));
 }
 
 console.log(`\nWynik: ${passed} zaliczonych, ${failed} niezaliczonych.`);
