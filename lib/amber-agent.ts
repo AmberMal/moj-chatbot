@@ -1,7 +1,7 @@
 // Warsztat 3 (lekcja 3): jeden endpoint /api/agent z dwoma trybami.
 //   mode=chat    – streamText, zwykła odpowiedź tekstowa, narzędzia wybierane przez model
 //                  (web_search, sprawdzObszar, informacjeOUrzadzeniu, generujObraz oraz z lekcji 4:
-//                  pogoda, waluty, swieta, wikipedia, kalkulator, czas, notatki, diagnostyka),
+//                  pogoda, waluty, swieta, wikipedia, kalkulator, czas, notatki, diagnostyka, przestepczosc),
 //                  stopWhen: isStepCount(6) (lekcja 4, ReAct), podpis HMAC v5 odpowiedzi.
 //   mode=analyze – generateText + Output.object + walidator (generateAmberOutput z lekcji 2),
 //                  analiza wyłącznie tekstu z pola wejściowego, bez historii i bez narzędzi.
@@ -46,6 +46,7 @@ export const AGENT_TOOL_NAMES = [
   "czas",
   "notatki",
   "diagnostyka",
+  "przestepczosc",
 ] as const;
 // Etykiety użytych narzędzi w metadanych (te same nazwy co w lib/amber-history.ts).
 const LABEL_ORDER = [
@@ -53,6 +54,7 @@ const LABEL_ORDER = [
   "aktualnyCzas",
   "czas",
   "sprawdzObszar",
+  "przestepczosc",
   "informacjeOUrzadzeniu",
   "pogoda",
   "waluty",
@@ -282,6 +284,15 @@ export function describeToolResult(r: StepResult): string | null {
       return `diagnostyka: konfiguracja kompletna: ${str(o.konfiguracjaKompletna)}`;
     case "sprawdzObszar":
       return `sprawdzObszar (${str(o.kodPocztowy)}): ${str(o.komunikat)}`;
+    case "przestepczosc": {
+      const obszar =
+        o.obszarDzialaniaAmber === "w_obszarze"
+          ? "w obszarze działania firmy"
+          : o.obszarDzialaniaAmber === "poza_obszarem"
+            ? "prawdopodobnie poza obszarem działania firmy"
+            : "obszar działania do potwierdzenia przez zespół";
+      return `przestepczosc (${str(o.kodPocztowy)}, ${str(o.miesiacOpis)}): ${num(o.lacznie)} zgłoszeń w promieniu ${str(o.promien)}; ${obszar}`;
+    }
     case "informacjeOUrzadzeniu":
       return `informacjeOUrzadzeniu (${str(o.producent)}): ${str(o.komunikat)}`;
     case "generujObraz":

@@ -51,6 +51,7 @@ export const HISTORY_TOOL_NAMES = [
   "czas",
   "notatki",
   "diagnostyka",
+  "przestepczosc",
 ] as const;
 
 // Warsztat 3: odpowiedź czatu z /api/agent (mode=chat).
@@ -73,6 +74,7 @@ export const AGENT_TOOL_PART_TYPES = [
   "tool-czas",
   "tool-notatki",
   "tool-diagnostyka",
+  "tool-przestepczosc",
 ] as const;
 export const MAX_AGENT_TOOL_PARTS = 10;
 export const MAX_HISTORY_SOURCES = 6;

@@ -1,4 +1,4 @@
-// Lekcja 4: narzędzia korzystające z publicznych API bez klucza: pogoda, waluty, swieta, wikipedia.
+// Lekcja 4: narzędzia korzystające z publicznych API bez klucza: pogoda, waluty, swieta, wikipedia, przestepczosc.
 // Działają tylko na serwerze. Zwracają tylko potrzebne pola + godzinę pobrania.
 // Gdy API nie odpowiada albo nie ma danych – zwracają czytelny komunikat po polsku (ok: false), a nie błąd aplikacji.
 
@@ -472,5 +472,201 @@ export function createWikipediaTool(options: ApiOptions = {}) {
       },
     ),
     execute: async (input) => getWikipedia(input, options),
+  });
+}
+
+// ---------------------------------------------------------------------------
+// przestepczosc – lekcja 4, Warsztat 1 (Fast): liczba przestępstw zgłoszonych policji (data.police.uk)
+// w promieniu ok. 1 mili od PEŁNEGO brytyjskiego kodu pocztowego, w ostatnim opublikowanym miesiącu.
+// Trzy zapytania: postcodes.io (kod → współrzędne) i crime-last-updated (miesiąc) równolegle, potem crimes-street.
+// Wynik zawiera wyłącznie liczby, kategorie, miesiąc, promień, źródło i uwagi o dokładności – bez nazw ulic,
+// identyfikatorów i wyników spraw oraz BEZ żadnych ocen bezpieczeństwa okolicy.
+// Obszar działania Amber liczy istniejąca funkcja checkArea (sprawdzObszar) – przekazywana z zewnątrz (deps),
+// bo pliki lib/ nie importują się nawzajem w czasie działania.
+// ---------------------------------------------------------------------------
+export const CRIME_TIMEOUT_MS = 6000; // na jedno zapytanie; 2 etapy → najwyżej ok. 12 s
+export const CRIME_RADIUS = "ok. 1 mila (ok. 1,6 km)";
+export const CRIME_SOURCE = "data.police.uk (Open Government Licence v3.0)";
+export const CRIME_NOTE =
+  "Lokalizacje w danych policji są przybliżone (anonimizowane). Liczby to zgłoszenia zarejestrowane przez policję " +
+  "w jednym miesiącu w promieniu ok. 1 mili; dane są publikowane z opóźnieniem.";
+export const CRIME_EMPTY_NOTE =
+  "Brak zgłoszeń w danych za ten miesiąc – nie musi to oznaczać braku przestępstw (dane mogą być niepełne).";
+export const CRIME_MESSAGES = {
+  invalid: "To nie wygląda na poprawny brytyjski kod pocztowy – poproś klienta o pełny kod pocztowy (np. SW19 1AA).",
+  outward:
+    "Proszę podać pełny kod pocztowy (np. SW19 1AA) – sama część kodu obejmuje zbyt duży obszar, aby wskazać okolicę obiektu.",
+  notCovered:
+    "Dane policji (data.police.uk) obejmują tylko Anglię, Walię i Irlandię Północną – dla tego kodu pocztowego nie są dostępne.",
+  crimesUnavailable: "Serwis data.police.uk nie odpowiada albo zwrócił zbyt dużo danych. Spróbuj ponownie za chwilę.",
+} as const;
+const OTHER_CRIME_LABEL = "inne przestępstwa";
+// Kategorie data.police.uk (crime-categories) → nazwy po polsku. Nieznana kategoria → „inne przestępstwa”.
+export const CRIME_CATEGORY_LABELS: Record<string, string> = {
+  "anti-social-behaviour": "zachowania aspołeczne",
+  "bicycle-theft": "kradzieże rowerów",
+  burglary: "włamania",
+  "criminal-damage-arson": "zniszczenie mienia i podpalenia",
+  drugs: "przestępstwa narkotykowe",
+  "other-theft": "inne kradzieże",
+  "possession-of-weapons": "posiadanie broni",
+  "public-order": "naruszenie porządku publicznego",
+  robbery: "rozboje",
+  shoplifting: "kradzieże sklepowe",
+  "theft-from-the-person": "kradzieże z osoby (np. kieszonkowe)",
+  "vehicle-crime": "przestępstwa związane z pojazdami",
+  "violent-crime": "przemoc i przestępstwa seksualne",
+  "other-crime": OTHER_CRIME_LABEL,
+};
+const POLISH_MONTHS = [
+  "styczeń", "luty", "marzec", "kwiecień", "maj", "czerwiec",
+  "lipiec", "sierpień", "wrzesień", "październik", "listopad", "grudzień",
+];
+// Ten sam wzorzec pełnego kodu co w checkArea (lib/amber-tools.ts) – zgodność sprawdza test.
+const CRIME_POSTCODE_FULL = /^[A-Z]{1,2}\d[A-Z\d]?\d[A-Z]{2}$/;
+const CRIME_POSTCODE_OUTWARD = /^[A-Z]{1,2}\d[A-Z\d]?$/;
+const POLICE_DATA_COUNTRIES = ["England", "Wales", "Northern Ireland"];
+
+export type AmberAreaStatus = "w_obszarze" | "do_potwierdzenia" | "poza_obszarem";
+export type CrimeDeps = { areaCheck: (kodPocztowy: string) => { wynik: string } };
+export type CrimeCategoryCount = { kategoria: string; liczba: number };
+export type CrimeResult =
+  | {
+      ok: true;
+      kodPocztowy: string;
+      typLokalizacji: "pełny kod pocztowy";
+      obszar: string;
+      obszarDzialaniaAmber: AmberAreaStatus;
+      promien: string;
+      miesiac: string; // RRRR-MM
+      miesiacOpis: string; // np. „wrzesień 2026”
+      lacznie: number;
+      kategorie: CrimeCategoryCount[];
+      uwagi: string;
+      zrodlo: string;
+      pobrano: string;
+    }
+  | ApiFailure;
+
+export function normalizePostcode(input: string): string {
+  return String(input ?? "").toUpperCase().replace(/\s+/g, "").slice(0, 10);
+}
+const displayPostcode = (normalized: string) => `${normalized.slice(0, -3)} ${normalized.slice(-3)}`;
+
+export function crimeMonthLabel(month: string): string {
+  const m = Number(month.slice(5, 7));
+  return `${POLISH_MONTHS[m - 1]} ${month.slice(0, 4)}`;
+}
+
+// Liczenie zgłoszeń po kategoriach (malejąco, przy remisie alfabetycznie). Wpisy bez kategorii są pomijane.
+export function countCrimes(items: unknown[]): { lacznie: number; kategorie: CrimeCategoryCount[] } {
+  const counts = new Map<string, number>();
+  let lacznie = 0;
+  for (const item of items) {
+    if (!isObject(item) || typeof item.category !== "string" || !item.category) continue;
+    const label = CRIME_CATEGORY_LABELS[item.category] ?? OTHER_CRIME_LABEL;
+    counts.set(label, (counts.get(label) ?? 0) + 1);
+    lacznie++;
+  }
+  const kategorie = [...counts.entries()]
+    .map(([kategoria, liczba]) => ({ kategoria, liczba }))
+    .sort((a, b) => b.liczba - a.liczba || a.kategoria.localeCompare(b.kategoria, "pl"));
+  return { lacznie, kategorie };
+}
+
+function areaStatus(deps: CrimeDeps, normalized: string): AmberAreaStatus {
+  let wynik = "";
+  try {
+    wynik = deps.areaCheck(normalized).wynik;
+  } catch {
+    wynik = "";
+  }
+  return wynik === "w_obszarze" || wynik === "poza_obszarem" ? wynik : "do_potwierdzenia";
+}
+
+export async function getCrimeStats(
+  { kodPocztowy }: { kodPocztowy: string },
+  options: ApiOptions,
+  deps: CrimeDeps,
+): Promise<CrimeResult> {
+  const normalized = normalizePostcode(kodPocztowy);
+  if (!CRIME_POSTCODE_FULL.test(normalized)) {
+    return fail(CRIME_POSTCODE_OUTWARD.test(normalized) ? CRIME_MESSAGES.outward : CRIME_MESSAGES.invalid, options);
+  }
+  const opts: ApiOptions = { ...options, timeoutMs: options.timeoutMs ?? CRIME_TIMEOUT_MS };
+
+  // Etap 1 (równolegle): kod → współrzędne oraz miesiąc ostatniej aktualizacji danych policji.
+  const [pc, updated] = await Promise.all([
+    getJson(`https://api.postcodes.io/postcodes/${encodeURIComponent(normalized)}`, opts),
+    getJson("https://data.police.uk/api/crime-last-updated", opts),
+  ]);
+  if (pc.status === "notFound") {
+    return fail(`Nie znalazłam kodu pocztowego „${displayPostcode(normalized)}”. Poproś klienta o sprawdzenie kodu.`, opts);
+  }
+  const result = pc.status === "ok" && isObject(pc.data) && isObject(pc.data.result) ? pc.data.result : null;
+  if (!result) return fail(UNAVAILABLE("postcodes.io"), opts);
+  const country = typeof result.country === "string" ? result.country : "";
+  const lat = result.latitude;
+  const lng = result.longitude;
+  if (
+    !POLICE_DATA_COUNTRIES.includes(country) ||
+    typeof lat !== "number" || typeof lng !== "number" || !Number.isFinite(lat) || !Number.isFinite(lng)
+  ) {
+    return fail(CRIME_MESSAGES.notCovered, opts);
+  }
+  const lastDate = updated.status === "ok" && isObject(updated.data) && typeof updated.data.date === "string" ? updated.data.date : "";
+  const month = lastDate.slice(0, 7);
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) return fail(UNAVAILABLE("data.police.uk"), opts);
+
+  // Etap 2: zgłoszenia w promieniu ok. 1 mili (stały promień API) w tym miesiącu.
+  const crimes = await getJson(
+    `https://data.police.uk/api/crimes-street/all-crime?date=${month}&lat=${lat}&lng=${lng}`,
+    opts,
+  );
+  if (crimes.status === "notFound") return fail(`Brak danych policji za ${crimeMonthLabel(month)}.`, opts);
+  if (crimes.status !== "ok" || !Array.isArray(crimes.data)) return fail(CRIME_MESSAGES.crimesUnavailable, opts);
+
+  const { lacznie, kategorie } = countCrimes(crimes.data);
+  return {
+    ok: true,
+    kodPocztowy: typeof result.postcode === "string" && result.postcode ? result.postcode : displayPostcode(normalized),
+    typLokalizacji: "pełny kod pocztowy",
+    obszar: typeof result.admin_district === "string" ? result.admin_district : "",
+    obszarDzialaniaAmber: areaStatus(deps, normalized),
+    promien: CRIME_RADIUS,
+    miesiac: month,
+    miesiacOpis: crimeMonthLabel(month),
+    lacznie,
+    kategorie,
+    uwagi: lacznie === 0 ? `${CRIME_NOTE} ${CRIME_EMPTY_NOTE}` : CRIME_NOTE,
+    zrodlo: CRIME_SOURCE,
+    pobrano: nowLabel(opts),
+  };
+}
+
+export function createCrimeTool(options: ApiOptions = {}, deps: CrimeDeps) {
+  return tool({
+    description:
+      "Liczba przestępstw zgłoszonych policji (data.police.uk) w promieniu ok. 1 mili od PEŁNEGO brytyjskiego kodu " +
+      "pocztowego (np. SW19 1AA), w ostatnim opublikowanym miesiącu, w podziale na kategorie. Zwraca też, czy kod " +
+      "leży w obszarze działania firmy. Użyj, gdy klient pyta o przestępczość, włamania lub zgłoszenia w okolicy " +
+      "swojego obiektu. Dane przekazuj neutralnie – nie oceniaj na ich podstawie bezpieczeństwa okolicy.",
+    inputSchema: jsonSchema<{ kodPocztowy: string }>(
+      {
+        type: "object",
+        properties: { kodPocztowy: { type: "string", minLength: 1, maxLength: 12, description: "Pełny kod pocztowy klienta" } },
+        required: ["kodPocztowy"],
+        additionalProperties: false,
+      },
+      {
+        validate: (v) => {
+          if (!isObject(v) || !onlyKeys(v, ["kodPocztowy"])) return bad("Nieprawidłowe dane kodu pocztowego.");
+          const kod = typeof v.kodPocztowy === "string" ? v.kodPocztowy.trim() : "";
+          if (!kod || kod.length > 12) return bad("Podaj pełny kod pocztowy (np. SW19 1AA).");
+          return ok({ kodPocztowy: kod });
+        },
+      },
+    ),
+    execute: async (input) => getCrimeStats(input, options, deps),
   });
 }

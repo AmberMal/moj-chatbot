@@ -1,4 +1,4 @@
-// Testy lekcji 4: osiem narzędzi pomocniczych – BEZ internetu (sztuczny fetch) i BEZ OpenRouter (sztuczny model).
+// Testy lekcji 4: osiem narzędzi pomocniczych + przestepczosc (Warsztat 1, Fast) – BEZ internetu (sztuczny fetch) i BEZ OpenRouter (sztuczny model).
 // Uruchomienie (w folderze projektu):
 //   node --experimental-strip-types scripts/test-amber-tools.mjs
 
@@ -21,8 +21,19 @@ import { buildStepList, formatStepList, prepareAgentMessages, STEP_LIMIT_MESSAGE
 import { SESSION_COOKIE, createSessionToken, isSessionValid, readCookie } from "../lib/auth.ts";
 import { AMBER_ANALYZE_INSTRUCTIONS, AMBER_CHAT_INSTRUCTIONS, AMBER_CHAT_INSTRUCTIONS_DEV } from "../lib/amber-instructions.ts";
 import { generateAmberOutput } from "../lib/amber-output.ts";
-import { informacjeOUrzadzeniu, sprawdzObszar } from "../lib/amber-tools.ts";
+import { checkArea, informacjeOUrzadzeniu, sprawdzObszar } from "../lib/amber-tools.ts";
 import {
+  CRIME_CATEGORY_LABELS,
+  CRIME_EMPTY_NOTE,
+  CRIME_MESSAGES,
+  CRIME_NOTE,
+  CRIME_RADIUS,
+  CRIME_SOURCE,
+  CRIME_TIMEOUT_MS,
+  countCrimes,
+  createCrimeTool,
+  crimeMonthLabel,
+  getCrimeStats,
   FORECAST_DAYS,
   createCurrencyTool,
   createHolidaysTool,
@@ -851,6 +862,232 @@ check("Instrukcja: co zrobić, gdy narzędzie pominięto z powodu limitu", /pomi
 check("Notatki opisane jako tymczasowe", /Notatki są tymczasowe/.test(AMBER_CHAT_INSTRUCTIONS) && /Nigdy nie przedstawiaj ich jako trwałej pamięci/.test(AMBER_CHAT_INSTRUCTIONS));
 check("DATA I GODZINA: narzędzie czas (domyślnie Londyn)", /Masz narzędzie czas .*Europe\/London/.test(AMBER_CHAT_INSTRUCTIONS) && !AMBER_CHAT_INSTRUCTIONS.includes("aktualnyCzas"));
 check("Ceny w bazie wiedzy bez zmian (£666 + VAT)", AMBER_CHAT_INSTRUCTIONS.includes("£666"));
+
+// ---------------------------------------------------------------------------
+console.log("\n=== 14. przestepczosc (Warsztat 1, Fast): data.police.uk + postcodes.io ===");
+{
+  const DEPS = { areaCheck: checkArea };
+  const PC = (postcode, extra = {}) => ({ status: 200, result: { postcode, latitude: 51.4214, longitude: -0.2064, country: "England", admin_district: "Merton", ...extra } });
+  const LAST = { date: "2026-09-01" };
+  const crime = (category, i) => ({
+    category, persistent_id: `pid${i}`, id: 1000 + i, month: "2026-09", location_type: "Force", context: "",
+    location: { latitude: "51.42", longitude: "-0.20", street: { id: 5, name: "On or near High Street" } },
+    outcome_status: { category: "Under investigation", date: "2026-09" },
+  });
+  const CRIMES = [
+    ...["anti-social-behaviour", "anti-social-behaviour", "anti-social-behaviour", "anti-social-behaviour"].map(crime),
+    ...["burglary", "burglary", "burglary"].map(crime),
+    ...["vehicle-crime", "vehicle-crime"].map(crime),
+    crime("zupelnie-nowa-kategoria", 99),
+    { category: "" }, null, { foo: 1 }, "tekst",
+  ];
+  const crimeFetch = (over = {}) => fakeFetch([
+    ["api.postcodes.io/postcodes/", over.pc ?? PC("SW19 1AA")],
+    ["data.police.uk/api/crime-last-updated", over.last ?? LAST],
+    ["data.police.uk/api/crimes-street/all-crime", over.crimes ?? CRIMES],
+  ]);
+  const run = async (kod, over = {}, extra = {}) => {
+    const f = crimeFetch(over);
+    const r = await getCrimeStats({ kodPocztowy: kod }, { fetch: f, now, ...extra }, over.deps ?? DEPS);
+    return { r, f, urls: f.calls.map((c) => c.url) };
+  };
+
+  // Poprawny wynik
+  {
+    const { r, f, urls } = await run("SW19 1AA");
+    check("Pełny kod → ok, kod z postcodes.io, dzielnica, obszar działania (checkArea)",
+      r.ok && r.kodPocztowy === "SW19 1AA" && r.obszar === "Merton" && r.obszarDzialaniaAmber === "w_obszarze" && r.typLokalizacji === "pełny kod pocztowy", JSON.stringify(r));
+    check("Miesiąc z crime-last-updated: 2026-09 → „wrzesień 2026”", r.miesiac === "2026-09" && r.miesiacOpis === "wrzesień 2026");
+    check("Liczenie: 10 zgłoszeń (wpisy bez kategorii pominięte)", r.lacznie === 10, String(r.lacznie));
+    check("Kategorie po polsku, malejąco; nieznana → „inne przestępstwa”",
+      JSON.stringify(r.kategorie) === JSON.stringify([
+        { kategoria: "zachowania aspołeczne", liczba: 4 }, { kategoria: "włamania", liczba: 3 },
+        { kategoria: "przestępstwa związane z pojazdami", liczba: 2 }, { kategoria: "inne przestępstwa", liczba: 1 },
+      ]), JSON.stringify(r.kategorie));
+    check("Promień, źródło (OGL), uwagi o dokładności, godzina pobrania",
+      r.promien === CRIME_RADIUS && r.promien === "ok. 1 mila (ok. 1,6 km)" && r.zrodlo === CRIME_SOURCE && r.zrodlo.includes("Open Government Licence") &&
+      r.uwagi === CRIME_NOTE && /przybliżone/.test(r.uwagi) && /opóźnieniem/.test(r.uwagi) && r.pobrano === "12.11.2026, 18:30:05");
+    check("Dokładnie 3 zapytania HTTP", f.calls.length === 3, String(f.calls.length));
+    check("postcodes.io: /postcodes/SW191AA (pełny kod, bez /outcodes/)", urls.includes("https://api.postcodes.io/postcodes/SW191AA") && !urls.some((u) => u.includes("/outcodes/")));
+    check("crime-last-updated wywołany", urls.includes("https://data.police.uk/api/crime-last-updated"));
+    check("crimes-street: date=RRRR-MM i współrzędne z postcodes.io (stały promień API, bez poly)",
+      urls.includes("https://data.police.uk/api/crimes-street/all-crime?date=2026-09&lat=51.4214&lng=-0.2064") && !urls.some((u) => u.includes("poly=")), urls.join(" | "));
+    check("Nagłówek Accept: application/json", f.calls.every((c) => c.init.headers.Accept === "application/json"));
+    check("Wynik: tylko ustalone pola",
+      JSON.stringify(Object.keys(r).sort()) === JSON.stringify(["kategorie", "kodPocztowy", "lacznie", "miesiac", "miesiacOpis", "obszar", "obszarDzialaniaAmber", "ok", "pobrano", "promien", "typLokalizacji", "uwagi", "zrodlo"]));
+    const json = JSON.stringify(r);
+    check("Wynik BEZ nazw ulic, identyfikatorów, współrzędnych zdarzeń i wyników spraw",
+      !json.includes("High Street") && !json.includes("pid") && !json.includes("1000") && !json.includes("Under investigation") && !json.includes("51.42\"") && !/street|outcome|persistent/i.test(json));
+    check("Wynik BEZ słów ocennych (bezpieczeństwo, ryzyko, wysoka/niska)", !/bezpieczn|niebezpieczn|ryzyk|groźn|wysok|nisk|alarmując/i.test(json));
+  }
+  // Normalizacja i format kodu
+  {
+    const a = await run("sw19 1aa");
+    const b = await run("  SW191AA ");
+    check("Normalizacja: małe litery i spacje → ten sam adres postcodes.io", a.urls[0] === "https://api.postcodes.io/postcodes/SW191AA" && b.urls.includes("https://api.postcodes.io/postcodes/SW191AA") && a.r.ok && b.r.ok);
+    for (const kod of ["SW19", "sw19", "EC1A", "M1"]) {
+      const { r, f } = await run(kod);
+      check(`Sama część kodu („${kod}”) → prośba o pełny kod, bez zapytań`, !r.ok && r.komunikat === CRIME_MESSAGES.outward && f.calls.length === 0, r.komunikat);
+    }
+    for (const kod of ["", "XYZ 123", "SW19 1A", "12345", "SW19 1AAA", "Londyn"]) {
+      const { r, f } = await run(kod);
+      check(`Zły format („${kod}”) → komunikat, bez zapytań`, !r.ok && r.komunikat === CRIME_MESSAGES.invalid && f.calls.length === 0 && typeof r.pobrano === "string", r.komunikat);
+    }
+  }
+  // Obszar działania – ta sama funkcja checkArea co sprawdzObszar
+  {
+    for (const [kod, expected] of [["SW19 1AA", "w_obszarze"], ["EC1A 1BB", "w_obszarze"], ["KT1 1AA", "w_obszarze"], ["GU1 1AA", "do_potwierdzenia"], ["SL4 1NJ", "do_potwierdzenia"], ["M1 1AE", "poza_obszarem"], ["CF10 1AA", "poza_obszarem"], ["BT1 1AA", "poza_obszarem"]]) {
+      const { r } = await run(kod, { pc: PC(kod) });
+      check(`${kod}: obszarDzialaniaAmber = checkArea = ${expected}`, r.ok && r.obszarDzialaniaAmber === expected && checkArea(kod).wynik === expected, `${r.obszarDzialaniaAmber} / ${checkArea(kod).wynik}`);
+    }
+    const bad = await run("SW19 1AA", { deps: { areaCheck: () => { throw new Error("x"); } } });
+    check("Błąd funkcji obszaru → „do_potwierdzenia” (bez wyjątku)", bad.r.ok && bad.r.obszarDzialaniaAmber === "do_potwierdzenia");
+    const weird = await run("SW19 1AA", { deps: { areaCheck: () => ({ wynik: "nieprawidlowy_kod" }) } });
+    check("Nieoczekiwany wynik obszaru → „do_potwierdzenia”", weird.r.obszarDzialaniaAmber === "do_potwierdzenia");
+  }
+  // Kraj i współrzędne
+  {
+    for (const country of ["Wales", "Northern Ireland"]) {
+      const { r } = await run("CF10 1AA", { pc: PC("CF10 1AA", { country }) });
+      check(`Kraj ${country} → dane dostępne`, r.ok);
+    }
+    for (const [name, extra] of [["Szkocja", { country: "Scotland" }], ["Wyspy Normandzkie", { country: "Channel Islands", latitude: null, longitude: null }], ["Wyspa Man", { country: "Isle of Man" }], ["brak współrzędnych", { latitude: null }], ["brak kraju", { country: undefined }]]) {
+      const { r, urls } = await run("EH1 1YZ", { pc: PC("EH1 1YZ", extra) });
+      check(`${name} → „dane policji obejmują tylko Anglię, Walię i Irlandię Północną”, bez crimes-street`, !r.ok && r.komunikat === CRIME_MESSAGES.notCovered && !urls.some((u) => u.includes("crimes-street")), r.komunikat);
+    }
+  }
+  // Błędy postcodes.io
+  {
+    const nf = await run("SW19 9ZZ", { pc: new Response(JSON.stringify({ status: 404, error: "Postcode not found" }), { status: 404 }) });
+    check("postcodes.io 404 (także kod wycofany) → „Nie znalazłam kodu pocztowego „SW19 9ZZ””, bez crimes-street",
+      !nf.r.ok && nf.r.komunikat.startsWith("Nie znalazłam kodu pocztowego „SW19 9ZZ”") && !nf.urls.some((u) => u.includes("crimes-street")), nf.r.komunikat);
+    for (const [name, pc] of [["500", status(500)], ["brak sieci", networkDown], ["zły JSON", new Response("<html>", { status: 200 })], ["brak pola result", { status: 200 }]]) {
+      const { r } = await run("SW19 1AA", { pc });
+      check(`postcodes.io: ${name} → „Serwis postcodes.io nie odpowiada”`, !r.ok && r.komunikat === "Serwis postcodes.io nie odpowiada. Spróbuj ponownie za chwilę.", r.komunikat);
+    }
+    const t0 = Date.now();
+    const slow = await run("SW19 1AA", { pc: neverAnswers }, { timeoutMs: 40 });
+    check("postcodes.io nie odpowiada → przerwanie po limicie czasu", !slow.r.ok && /postcodes\.io nie odpowiada/.test(slow.r.komunikat) && Date.now() - t0 < 1000);
+  }
+  // Błędy crime-last-updated
+  for (const [name, last] of [["500", status(500)], ["429", status(429)], ["brak daty", {}], ["zła data", { date: "wczoraj" }], ["miesiąc 13", { date: "2026-13-01" }], ["brak sieci", networkDown]]) {
+    const { r, urls } = await run("SW19 1AA", { last });
+    check(`crime-last-updated: ${name} → „Serwis data.police.uk nie odpowiada”, bez crimes-street`, !r.ok && r.komunikat === "Serwis data.police.uk nie odpowiada. Spróbuj ponownie za chwilę." && !urls.some((u) => u.includes("crimes-street")), r.komunikat);
+  }
+  // Błędy crimes-street i brak danych
+  {
+    for (const [name, crimes] of [["503 (ponad 10 000 zgłoszeń)", status(503)], ["429 (limit zapytań)", status(429)], ["500", status(500)], ["zły JSON", new Response("nie json", { status: 200 })], ["obiekt zamiast listy", { error: "x" }], ["brak sieci", networkDown]]) {
+      const { r } = await run("SW19 1AA", { crimes });
+      check(`crimes-street: ${name} → komunikat po polsku`, !r.ok && r.komunikat === CRIME_MESSAGES.crimesUnavailable, r.komunikat);
+    }
+    const nf = await run("SW19 1AA", { crimes: status(404) });
+    check("crimes-street 404 → „Brak danych policji za wrzesień 2026.”", !nf.r.ok && nf.r.komunikat === "Brak danych policji za wrzesień 2026.");
+    const empty = await run("SW19 1AA", { crimes: [] });
+    check("Pusta lista → ok, 0 zgłoszeń, uwaga, że nie musi to oznaczać braku przestępstw",
+      empty.r.ok && empty.r.lacznie === 0 && empty.r.kategorie.length === 0 && empty.r.uwagi.includes(CRIME_EMPTY_NOTE) && empty.r.uwagi.includes(CRIME_NOTE));
+  }
+  // Czas: etap 1 równolegle, limit 6 s na zapytanie
+  {
+    const delayed = (ms, body) => () => new Promise((res) => setTimeout(() => res(new Response(JSON.stringify(body), { status: 200 })), ms));
+    const t0 = Date.now();
+    const { r } = await run("SW19 1AA", { pc: delayed(150, PC("SW19 1AA")), last: delayed(150, LAST) });
+    const ms = Date.now() - t0;
+    check("Etap 1 równolegle: postcodes.io i crime-last-updated (2 × 150 ms → < 290 ms)", r.ok && ms < 290, `${ms} ms`);
+    check("Limit jednego zapytania: 6 s (2 etapy → najwyżej ok. 12 s)", CRIME_TIMEOUT_MS === 6000);
+    const src = readFileSync(new URL("../lib/amber-tools-api.ts", import.meta.url), "utf8");
+    check("Domyślnie używany limit CRIME_TIMEOUT_MS (wspólny helper bez zmian)", /timeoutMs: options\.timeoutMs \?\? CRIME_TIMEOUT_MS/.test(src) && /export const API_TIMEOUT_MS = 8000;/.test(src));
+  }
+  // Funkcje pomocnicze
+  {
+    const months = ["2027-01", "2026-02", "2026-03", "2026-04", "2026-05", "2026-06", "2026-07", "2026-08", "2026-10", "2026-11", "2026-12"].map(crimeMonthLabel);
+    check("Nazwy miesięcy w mianowniku", JSON.stringify(months) === JSON.stringify(["styczeń 2027", "luty 2026", "marzec 2026", "kwiecień 2026", "maj 2026", "czerwiec 2026", "lipiec 2026", "sierpień 2026", "październik 2026", "listopad 2026", "grudzień 2026"]), JSON.stringify(months));
+    check("Tabela kategorii: 14 kategorii data.police.uk (bez all-crime)", Object.keys(CRIME_CATEGORY_LABELS).length === 14 && !("all-crime" in CRIME_CATEGORY_LABELS) && CRIME_CATEGORY_LABELS.burglary === "włamania");
+    const c = countCrimes([{ category: "robbery" }, { category: "burglary" }, { category: "robbery" }, { category: "burglary" }]);
+    check("countCrimes: remis → alfabetycznie", JSON.stringify(c.kategorie.map((k) => k.kategoria)) === '["rozboje","włamania"]' && c.lacznie === 4);
+  }
+}
+
+console.log("\n=== 15. przestepczosc w agencie: rejestracja, etykiety, podpis historii, ReAct ===");
+{
+  const DEPS = { areaCheck: checkArea };
+  const CF = fakeFetch([
+    ["api.postcodes.io/postcodes/", { status: 200, result: { postcode: "SW19 1AA", latitude: 51.4214, longitude: -0.2064, country: "England", admin_district: "Merton" } }],
+    ["data.police.uk/api/crime-last-updated", { date: "2026-09-01" }],
+    ["data.police.uk/api/crimes-street/all-crime", [{ category: "burglary" }, { category: "burglary" }, { category: "anti-social-behaviour" }]],
+  ]);
+  const crimeHandler = (model) => createAgentHandler({
+    getSession: (req) => {
+      const token = readCookie(req, SESSION_COOKIE);
+      return token && isSessionValid(token, AUTH) ? { secret: AUTH.secret, token } : null;
+    },
+    createModels: () => ({ model, tools: { sprawdzObszar, przestepczosc: createCrimeTool({ fetch: CF, now }, DEPS) } }),
+    instructions: { chat: AMBER_CHAT_INSTRUCTIONS, analyze: AMBER_ANALYZE_INSTRUCTIONS },
+    history: { deriveHistoryKey, sessionIdFromToken, checkChatHistory, signAgentChatTurn },
+    generateAmberOutput, maxTextChars: MAX_USER_MESSAGE_CHARS, maxRetries: 0, now: () => NOW, log: () => {},
+  });
+  const before = CF.calls.length;
+  const r401 = await crimeHandler(chatModel([[...textChunks("x"), stop]]))(request({ mode: "chat", messages: [user("u1", "SW19 1AA")] }, ""));
+  check("Bez sesji → 401, bez zapytań do data.police.uk", r401.status === 401 && CF.calls.length === before);
+
+  // ReAct: krok 1 sprawdzObszar, krok 2 przestepczosc, krok 3 odpowiedź.
+  const model = chatModel([
+    [call("k1", "sprawdzObszar", { kodPocztowy: "SW19 1AA" }), toolCallsFinish],
+    [call("k2", "przestepczosc", { kodPocztowy: "SW19 1AA" }), toolCallsFinish],
+    [...textChunks("We wrześniu 2026 w promieniu ok. 1 mili zgłoszono 3 zdarzenia."), stop],
+  ]);
+  const { message } = await readChat(await crimeHandler(model)(request({ mode: "chat", messages: [user("u1", "Czy obsługujecie SW19 1AA i ile było tam włamań?")] })));
+  const tools = message.metadata?.tools ?? [];
+  check("Etykiety: sprawdzObszar, przestepczosc", JSON.stringify(tools) === '["sprawdzObszar","przestepczosc"]', JSON.stringify(tools));
+  check("Etykieta przestepczosc na liście dozwolonych w historii", HISTORY_TOOL_NAMES.includes("przestepczosc"));
+  const out = output(message, "przestepczosc");
+  check("Wynik narzędzia w przeglądarce: 3 zgłoszenia, w_obszarze, wrzesień 2026", out?.ok === true && out.lacznie === 3 && out.obszarDzialaniaAmber === "w_obszarze" && out.miesiacOpis === "wrzesień 2026", JSON.stringify(out));
+  check("ReAct: 3 kroki modelu (narzędzie → narzędzie → odpowiedź)", model.doStreamCalls.length === 3);
+  check("Krok 3: model dostał wynik przestepczosc", JSON.stringify(model.doStreamCalls[2].prompt).includes("wrzesień 2026"));
+  const steps = formatStepList(buildStepList(message));
+  check("Lista kroków w czacie: sprawdzObszar → przestepczosc", /sprawdzObszar/.test(steps) && /przestepczosc/.test(steps) && steps.indexOf("sprawdzObszar") < steps.indexOf("przestepczosc"), steps);
+  const sent = model.doStreamCalls[0].tools.find((t) => t.name === "przestepczosc");
+  check("Model dostał narzędzie z opisem (pełny kod, neutralność)", sent && /PEŁNEGO/.test(sent.description) && /nie oceniaj/.test(sent.description));
+  check("Odpowiedź podpisana", typeof message.metadata?.sig === "string");
+
+  // Kolejna tura: podpis przyjęty, wyniki narzędzia NIE trafiają do modelu.
+  const next = chatModel([[...textChunks("Proszę bardzo."), stop]]);
+  const r2 = await crimeHandler(next)(request({ mode: "chat", messages: [user("u1", "Czy obsługujecie SW19 1AA i ile było tam włamań?"), message, user("u2", "Dziękuję")] }));
+  check("Historia z tool-przestepczosc → podpis przyjęty (200)", r2.status === 200);
+  await readChat(r2);
+  const prompt2 = JSON.stringify(next.doStreamCalls[0].prompt.filter((m) => m.role !== "system"));
+  check("Wyniki narzędzia z historii NIE trafiają do modelu", !prompt2.includes("obszarDzialaniaAmber") && !prompt2.includes("Merton") && !prompt2.includes("zachowania aspołeczne") && prompt2.includes("zgłoszono 3 zdarzenia"));
+  const forged = JSON.parse(JSON.stringify(message));
+  forged.metadata.tools = ["sprawdzObszar"];
+  const r3 = await crimeHandler(chatModel([[...textChunks("x"), stop]]))(request({ mode: "chat", messages: [user("u1", "Czy obsługujecie SW19 1AA i ile było tam włamań?"), forged, user("u2", "Dalej")] }));
+  check("Sfałszowana lista narzędzi → odrzucona (400)", r3.status === 400);
+
+  // Złe dane wejściowe → błąd wejścia, rozmowa toczy się dalej.
+  const badModel = chatModel([[call("b1", "przestepczosc", { kodPocztowy: "SW19 1AA", admin: true }), toolCallsFinish], [...textChunks("Proszę o pełny kod."), stop]]);
+  const e = console.error; console.error = () => {};
+  const { message: mb } = await readChat(await crimeHandler(badModel)(request({ mode: "chat", messages: [user("u1", "przestępczość")] })));
+  console.error = e;
+  check("Dodatkowe pole w danych → błąd wejścia (narzędzie nie wykonane)", mb.parts.some((p) => p.type === "tool-przestepczosc" && p.state === "output-error"));
+
+  // Podsumowanie po limicie kroków – z prawdziwego wyniku narzędzia.
+  const summary = buildStepLimitSummary(AGENT_STEP_LIMIT, [{ step: 1, name: "przestepczosc", input: { kodPocztowy: "SW19 1AA" }, kind: "ok", output: out }], false);
+  check("Podsumowanie ReAct zawiera wynik przestepczosc", summary.includes("przestepczosc (SW19 1AA, wrzesień 2026): 3 zgłoszeń w promieniu ok. 1 mila (ok. 1,6 km); w obszarze działania firmy"), summary);
+  check("Limity agenta bez zmian: 10 wywołań, 8 (miękki), 6 kroków", AGENT_TOOL_CALL_LIMIT === 10 && AGENT_TOOL_SOFT_LIMIT === 8 && AGENT_STEP_LIMIT === 6);
+  check("Limit części narzędzi w historii bez zmian (10)", MAX_AGENT_TOOL_PARTS === 10);
+
+  const route = readFileSync(new URL("../app/api/agent/route.ts", import.meta.url), "utf8");
+  check("route.ts: przestepczosc z checkArea (ta sama funkcja co sprawdzObszar)", route.includes("przestepczosc: createCrimeTool({}, { areaCheck: checkArea })") && /import \{ checkArea, informacjeOUrzadzeniu, sprawdzObszar \} from "\.\.\/\.\.\/\.\.\/lib\/amber-tools";/.test(route));
+  const chatUi = readFileSync(new URL("../app/chat.tsx", import.meta.url), "utf8");
+  check("Etykieta w czacie: „📊 przestepczosc”", chatUi.includes('przestepczosc: "📊 przestepczosc"'));
+
+  // Instrukcja
+  const I = AMBER_CHAT_INSTRUCTIONS;
+  check("Instrukcja: sekcja STATYSTYKI PRZESTĘPCZOŚCI, tylko pełny kod", I.includes("STATYSTYKI PRZESTĘPCZOŚCI (narzędzie przestepczosc)") && I.includes("wyłącznie pełny brytyjski kod pocztowy") && I.includes("poproś o pełny kod pocztowy"));
+  check("Instrukcja: wyraźna informacja przy poza_obszarem i do_potwierdzenia", /„poza_obszarem” napisz wyraźnie, że lokalizacja jest prawdopodobnie poza obszarem działania firmy/.test(I) && /„do_potwierdzenia” napisz, że obszar potwierdzi nasz zespół/.test(I));
+  check("Instrukcja: neutralność – bez ocen, porównań, trendów i przewidywań", I.includes("Nie oceniaj bezpieczeństwa okolicy") && I.includes("Nie porównuj z innymi okolicami") && I.includes("nie wyciągaj wniosków o trendach") && I.includes("nie przewiduj przyszłości"));
+  check("Instrukcja: bez straszenia i nacisku sprzedażowego, bez nazw ulic", I.includes("Nie strasz klienta") && I.includes("nakłaniania do zakupu") && I.includes("Nie podawaj nazw ulic"));
+  check("Instrukcja: miesiąc, promień, źródło, przybliżone lokalizacje, opóźnienie", I.includes("miesiąc danych (miesiacOpis)") && I.includes("data.police.uk") && I.includes("lokalizacje w danych są przybliżone") && I.includes("z opóźnieniem"));
+  check("Instrukcja testowa (dev) też zawiera zasady; analiza – nie", AMBER_CHAT_INSTRUCTIONS_DEV.includes("STATYSTYKI PRZESTĘPCZOŚCI") && !AMBER_ANALYZE_INSTRUCTIONS.includes("STATYSTYKI PRZESTĘPCZOŚCI"));
+}
 
 console.log(`\nWynik: ${passed} zaliczonych, ${failed} niezaliczonych.`);
 process.exit(failed === 0 ? 0 : 1);

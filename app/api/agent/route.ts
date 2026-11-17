@@ -7,9 +7,15 @@ import {
   AMBER_CHAT_INSTRUCTIONS_DEV,
 } from "../../../lib/amber-instructions";
 import { generateAmberOutput } from "../../../lib/amber-output";
-import { informacjeOUrzadzeniu, sprawdzObszar } from "../../../lib/amber-tools";
+import { checkArea, informacjeOUrzadzeniu, sprawdzObszar } from "../../../lib/amber-tools";
 import { createDiagnosticsTool, createNotesTool, czas, kalkulator } from "../../../lib/amber-tools-local";
-import { createCurrencyTool, createHolidaysTool, createWeatherTool, createWikipediaTool } from "../../../lib/amber-tools-api";
+import {
+  createCrimeTool,
+  createCurrencyTool,
+  createHolidaysTool,
+  createWeatherTool,
+  createWikipediaTool,
+} from "../../../lib/amber-tools-api";
 import { IMAGE_MODEL_ID, createImageTool } from "../../../lib/amber-image";
 import {
   MAX_USER_MESSAGE_CHARS,
@@ -71,6 +77,8 @@ export async function POST(req: Request) {
         waluty: createCurrencyTool(),
         swieta: createHolidaysTool(),
         wikipedia: createWikipediaTool(),
+        // Lekcja 4, Warsztat 1 (Fast): statystyki zgłoszeń policji; obszar działania liczy ta sama funkcja co sprawdzObszar.
+        przestepczosc: createCrimeTool({}, { areaCheck: checkArea }),
         kalkulator,
         czas,
         notatki: createNotesTool(sessionId),

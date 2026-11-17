@@ -44,6 +44,7 @@ const TOOL_LABELS: Record<string, string> = {
   kalkulator: "🧮 kalkulator",
   notatki: "📝 notatki",
   diagnostyka: "🩺 diagnostyka",
+  przestepczosc: "📊 przestepczosc",
 };
 
 // Lekcja 3 (Vision): zdjęcia jpg/png/webp do 4 MB. Przed wysłaniem przeglądarka

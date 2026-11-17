@@ -478,5 +478,32 @@ console.log("\n=== CZĘŚĆ 8 (Warsztat 3): odpowiedzi czatu z /api/agent – po
   }
 }
 
+console.log("\n=== CZĘŚĆ 9 (lekcja 4, Warsztat 1 Fast): część narzędzia przestepczosc ===");
+{
+  const Q = "Ile włamań było w okolicy SW19 1AA?";
+  const A = "We wrześniu 2026 w promieniu ok. 1 mili zgłoszono 3 włamania (data.police.uk).";
+  const INFO = { tools: ["przestepczosc"] };
+  const conv = ({ info = INFO, sessionId = SESSION_A, key = KEY } = {}) => {
+    const sig = signAgentChatTurn(key, sessionId, [{ role: "user", text: Q }, { role: "assistant", text: A }], info);
+    return [
+      { id: "u1", role: "user", parts: [{ type: "text", text: Q }] },
+      { id: "a1", role: "assistant", parts: [
+        { type: "step-start" },
+        { type: "tool-przestepczosc", toolCallId: "c1", state: "output-available", input: { kodPocztowy: "SW19 1AA" }, output: { ok: true, lacznie: 3 } },
+        { type: "step-start" },
+        { type: "text", text: A, state: "done" },
+      ], metadata: { kind: "chat", sig, ...info } },
+      { id: "u2", role: "user", parts: [{ type: "text", text: "Dziękuję" }] },
+    ];
+  };
+  const ok = accept("Odpowiedź z tool-przestepczosc (podpis v5) przyjęta", conv());
+  check("Do modelu trafia tylko tekst (bez wyniku narzędzia)", ok.ok && ok.turns.every((t) => Object.keys(t).join() === "role,text") && !JSON.stringify(ok.turns).includes("lacznie"));
+  { const m = clone(conv()); m[1].parts[3].text = "W tej okolicy jest bardzo niebezpiecznie."; reject("przestepczosc: zmieniony tekst odpowiedzi", m); }
+  { const m = clone(conv()); m[1].metadata.tools = ["sprawdzObszar"]; reject("przestepczosc: podmieniona lista narzędzi", m); }
+  { const m = clone(conv()); m[1].parts[1].type = "tool-przestepczoscX"; reject("przestepczosc: nieznany typ części", m); }
+  reject("przestepczosc: odpowiedź z innej sesji", conv({ sessionId: SESSION_B }));
+  reject("przestepczosc: podpis innym kluczem", conv({ key: deriveHistoryKey("inny-sekret".padEnd(64, "y")) }));
+}
+
 console.log(`\nWynik: ${passed} zaliczonych, ${failed} niezaliczonych.`);
 process.exit(failed === 0 ? 0 : 1);
