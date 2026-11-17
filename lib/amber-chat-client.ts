@@ -22,6 +22,8 @@ function hasSignature(message: UIMessage): boolean {
 // 3. wygenerowane obrazy NIE wracają na serwer (z wyniku narzędzia zostaje tylko { ok });
 // 4. (lekcja 4) części innych narzędzi NIE wracają na serwer – serwer ich nie potrzebuje (nie są podpisane
 //    i nie trafiają do modelu). Zostaje tylko część obrazu. Rozmowa w przeglądarce wygląda tak samo.
+// 5. (lekcja 4, Warsztat 2 Standard) liczniki pod odpowiedzią (metadata.stats) NIE wracają na serwer –
+//    służą tylko do wyświetlenia i nie są podpisane (serwer odrzuciłby historię z tym polem).
 export function prepareAgentMessages(messages: UIMessage[]): UIMessage[] {
   const signed = messages.filter((message) => message.role !== "assistant" || hasSignature(message));
   const lastAssistant = signed.map((message) => message.role).lastIndexOf("assistant");
@@ -42,8 +44,33 @@ export function prepareAgentMessages(messages: UIMessage[]): UIMessage[] {
       });
     // Odpowiedź bez tekstu i bez obrazu (np. same narzędzia) – pusty tekst, żeby historia pozostała poprawna.
     const hasContent = parts.some((part) => part.type === "text" || part.type === "tool-generujObraz");
-    return { ...message, parts: hasContent ? parts : [...parts, { type: "text" as const, text: "" }] } as UIMessage;
+    const metadata = withoutStats(message.metadata);
+    return {
+      ...message,
+      ...(metadata !== undefined ? { metadata } : {}),
+      parts: hasContent ? parts : [...parts, { type: "text" as const, text: "" }],
+    } as UIMessage;
   });
+}
+
+function withoutStats(metadata: unknown): unknown {
+  if (typeof metadata !== "object" || metadata === null || !("stats" in metadata)) return metadata;
+  const { stats: _stats, ...rest } = metadata as Record<string, unknown>;
+  return rest;
+}
+
+// Warsztat 2 (Standard): liczniki pod odpowiedzią, np. „Kroki modelu: 3 · Wywołania narzędzi: 2 · Czas: 8,4 s”.
+// null = brak liczników (starsza odpowiedź albo nieprawidłowe dane).
+export function formatAgentStats(metadata: unknown): string | null {
+  const stats = (metadata as { stats?: unknown } | null | undefined)?.stats as
+    | { kroki?: unknown; narzedzia?: unknown; czasMs?: unknown }
+    | undefined;
+  if (typeof stats !== "object" || stats === null) return null;
+  const { kroki, narzedzia, czasMs } = stats;
+  const isCount = (v: unknown): v is number => typeof v === "number" && Number.isInteger(v) && v >= 0;
+  if (!isCount(kroki) || !isCount(narzedzia) || !isCount(czasMs)) return null;
+  const seconds = (czasMs / 1000).toLocaleString("pl-PL", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+  return `Kroki modelu: ${kroki} · Wywołania narzędzi: ${narzedzia} · Czas: ${seconds} s`;
 }
 
 // Limit kroków: model zakończył na wywołaniu narzędzia (stopWhen: isStepCount(6)).

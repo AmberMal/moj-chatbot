@@ -30,8 +30,14 @@ const onlyKeys = (v: Record<string, unknown>, allowed: string[]) => Object.keys(
 
 export type ApiFailure = { ok: false; komunikat: string; pobrano: string };
 const UNAVAILABLE = (serwis: string) => `Serwis ${serwis} nie odpowiada. Spróbuj ponownie za chwilę.`;
+// Lekcja 4, Warsztat 2 (Standard): przekroczony limit czasu zapytania → „Źródło nie odpowiada (nazwa źródła).”
+export const SOURCE_TIMEOUT = (zrodlo: string) => `Źródło nie odpowiada (${zrodlo}).`;
 
-type GetResult = { status: "ok"; data: unknown } | { status: "notFound" } | { status: "error" };
+type GetResult = { status: "ok"; data: unknown } | { status: "notFound" } | { status: "error"; timedOut?: boolean };
+
+// Komunikat dla nieudanego zapytania: przekroczony czas → „Źródło nie odpowiada (…)”, inny błąd → „Serwis … nie odpowiada”.
+const unavailable = (serwis: string, zrodlo: string, res?: GetResult) =>
+  res && res.status === "error" && res.timedOut ? SOURCE_TIMEOUT(zrodlo) : UNAVAILABLE(serwis);
 
 // Pobranie JSON z limitem czasu. 404 = brak danych; inne błędy/timeout/zły JSON = serwis niedostępny.
 async function getJson(url: string, options: ApiOptions, headers?: Record<string, string>): Promise<GetResult> {
@@ -46,7 +52,7 @@ async function getJson(url: string, options: ApiOptions, headers?: Record<string
     if (!textBody.trim()) return { status: "ok", data: null };
     return { status: "ok", data: JSON.parse(textBody) as unknown };
   } catch {
-    return { status: "error" };
+    return controller.signal.aborted ? { status: "error", timedOut: true } : { status: "error" };
   } finally {
     clearTimeout(timer);
   }
@@ -117,7 +123,7 @@ export async function geocodeCity(miasto: string, options: ApiOptions = {}): Pro
     "https://geocoding-api.open-meteo.com/v1/search?" +
     new URLSearchParams({ name: miasto, count: "1", language: "pl", format: "json" }).toString();
   const geo = await getJson(geoUrl, options);
-  if (geo.status === "error") return fail(UNAVAILABLE("pogodowy Open-Meteo"), options);
+  if (geo.status === "error") return fail(unavailable("pogodowy Open-Meteo", "Open-Meteo", geo), options);
   const place = geo.status === "ok" && isObject(geo.data) && Array.isArray(geo.data.results) ? geo.data.results[0] : undefined;
   if (!isObject(place) || typeof place.latitude !== "number" || typeof place.longitude !== "number") {
     return fail(`Nie znalazłam miasta „${miasto}”. Sprawdź pisownię albo podaj większe miasto w pobliżu.`, options);
@@ -162,7 +168,7 @@ export async function getWeather(
       forecast_days: String(FORECAST_DAYS),
     }).toString();
   const forecast = await getJson(forecastUrl, options);
-  if (forecast.status !== "ok") return fail(UNAVAILABLE("pogodowy Open-Meteo"), options);
+  if (forecast.status !== "ok") return fail(unavailable("pogodowy Open-Meteo", "Open-Meteo", forecast), options);
   const daily = isObject(forecast.data) && isObject(forecast.data.daily) ? forecast.data.daily : null;
   const times = daily && Array.isArray(daily.time) ? daily.time : [];
   const i = times.indexOf(day);
@@ -265,7 +271,7 @@ export async function getCurrency({ waluta, kwota }: CurrencyInput, options: Api
   if (res.status === "notFound") {
     return fail(`NBP nie publikuje kursu waluty „${code}”. Podaj trzyliterowy kod, np. EUR, USD, GBP.`, options);
   }
-  if (res.status === "error") return fail(UNAVAILABLE("NBP"), options);
+  if (res.status === "error") return fail(unavailable("NBP", "NBP", res), options);
   const d = res.data;
   const rate = isObject(d) && Array.isArray(d.rates) ? d.rates[0] : undefined;
   if (!isObject(d) || !isObject(rate) || typeof rate.mid !== "number" || !Number.isFinite(rate.mid) || rate.mid <= 0) {
@@ -357,7 +363,7 @@ export type HolidaysResult =
 export async function getHolidays({ kraj, rok }: HolidaysInput, options: ApiOptions = {}): Promise<HolidaysResult> {
   const cc = kraj.toUpperCase();
   const res = await getJson(`https://date.nager.at/api/v3/PublicHolidays/${rok}/${cc}`, options);
-  if (res.status === "error") return fail(UNAVAILABLE("Nager.Date"), options);
+  if (res.status === "error") return fail(unavailable("Nager.Date", "Nager.Date", res), options);
   const unknownCountry = `Nie mam listy świąt dla kraju „${cc}”. Podaj dwuliterowy kod kraju, np. PL, GB, DE.`;
   if (res.status === "notFound" || !Array.isArray(res.data) || res.data.length === 0) return fail(unknownCountry, options);
   const swieta: Holiday[] = res.data
@@ -426,7 +432,7 @@ export async function getWikipedia({ haslo }: { haslo: string }, options: ApiOpt
     "Api-User-Agent": WIKI_USER_AGENT,
     "User-Agent": WIKI_USER_AGENT,
   });
-  if (res.status === "error") return fail(UNAVAILABLE("Wikipedia"), options);
+  if (res.status === "error") return fail(unavailable("Wikipedia", "Wikipedia", res), options);
   const notFound = `W polskiej Wikipedii nie ma hasła „${haslo}”. Spróbuj innej nazwy.`;
   if (res.status === "notFound" || !isObject(res.data)) return fail(notFound, options);
   const d = res.data;
@@ -604,7 +610,7 @@ export async function getCrimeStats(
     return fail(`Nie znalazłam kodu pocztowego „${displayPostcode(normalized)}”. Poproś klienta o sprawdzenie kodu.`, opts);
   }
   const result = pc.status === "ok" && isObject(pc.data) && isObject(pc.data.result) ? pc.data.result : null;
-  if (!result) return fail(UNAVAILABLE("postcodes.io"), opts);
+  if (!result) return fail(unavailable("postcodes.io", "postcodes.io", pc), opts);
   const country = typeof result.country === "string" ? result.country : "";
   const lat = result.latitude;
   const lng = result.longitude;
@@ -616,7 +622,7 @@ export async function getCrimeStats(
   }
   const lastDate = updated.status === "ok" && isObject(updated.data) && typeof updated.data.date === "string" ? updated.data.date : "";
   const month = lastDate.slice(0, 7);
-  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) return fail(UNAVAILABLE("data.police.uk"), opts);
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) return fail(unavailable("data.police.uk", "data.police.uk", updated), opts);
 
   // Etap 2: zgłoszenia w promieniu ok. 1 mili (stały promień API) w tym miesiącu.
   const crimes = await getJson(
@@ -624,6 +630,7 @@ export async function getCrimeStats(
     opts,
   );
   if (crimes.status === "notFound") return fail(`Brak danych policji za ${crimeMonthLabel(month)}.`, opts);
+  if (crimes.status === "error" && crimes.timedOut) return fail(SOURCE_TIMEOUT("data.police.uk"), opts);
   if (crimes.status !== "ok" || !Array.isArray(crimes.data)) return fail(CRIME_MESSAGES.crimesUnavailable, opts);
 
   const { lacznie, kategorie } = countCrimes(crimes.data);

@@ -76,7 +76,8 @@ export const AGENT_TOOL_PART_TYPES = [
   "tool-diagnostyka",
   "tool-przestepczosc",
 ] as const;
-export const MAX_AGENT_TOOL_PARTS = 10;
+// Lekcja 4, Warsztat 2 (Standard): 16 – tyle samo co limit wywołań narzędzi w jednym zadaniu (AGENT_TOOL_CALL_LIMIT).
+export const MAX_AGENT_TOOL_PARTS = 16;
 export const MAX_HISTORY_SOURCES = 6;
 
 // Źródło z wyszukiwania (część „source-url” odpowiedzi Amber).

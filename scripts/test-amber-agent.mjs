@@ -119,7 +119,10 @@ async function readChat(response) {
   const chunks = raw.split("\n").filter((l) => l.startsWith("data: ") && l !== "data: [DONE]").map((l) => JSON.parse(l.slice(6)));
   let message;
   for await (const m of readUIMessageStream({ stream: streamOf(chunks) })) message = m;
-  return { chunks, message: { ...message, role: "assistant" } };
+  // Warsztat 2 (Standard): liczniki (metadata.stats) służą tylko do wyświetlenia – przeglądarka nie odsyła ich
+  // w historii (prepareAgentMessages), więc tu też je oddzielamy. Serwer odrzuca historię z polem stats (test niżej).
+  const { stats, ...metadata } = message?.metadata ?? {};
+  return { chunks, stats, message: { ...message, role: "assistant", ...(message?.metadata ? { metadata } : {}) } };
 }
 const user = (id, text) => ({ id, role: "user", parts: [{ type: "text", text }] });
 const SESSION_ID = sessionIdFromToken(TOKEN);
@@ -432,8 +435,8 @@ console.log("\n=== Lekcja 4, Warsztat 1 (Fast): narzędzie przestepczosc w agenc
   check("przestepczosc na liście narzędzi agenta, etykiet historii i części historii",
     AGENT_TOOL_NAMES.includes("przestepczosc") && HISTORY_TOOL_NAMES.includes("przestepczosc") && AGENT_TOOL_PART_TYPES.includes("tool-przestepczosc"));
   check("Każde narzędzie agenta ma dozwolony typ części w historii", AGENT_TOOL_NAMES.every((n) => AGENT_TOOL_PART_TYPES.includes(`tool-${n}`)));
-  check("Limity bez zmian: 10 wywołań, 8 (miękki), 6 kroków, 10 części narzędzi",
-    AGENT_TOOL_CALL_LIMIT === 10 && AGENT_TOOL_SOFT_LIMIT === 8 && AGENT_STEP_LIMIT === 6 && MAX_AGENT_TOOL_PARTS === 10);
+  check("Limity (Warsztat 2 Standard): 16 wywołań, 14 (miękki), 6 kroków, 16 części narzędzi",
+    AGENT_TOOL_CALL_LIMIT === 16 && AGENT_TOOL_SOFT_LIMIT === 14 && AGENT_STEP_LIMIT === 6 && MAX_AGENT_TOOL_PARTS === 16);
   const base = { ok: true, kodPocztowy: "M1 1AE", miesiacOpis: "wrzesień 2026", lacznie: 1234, promien: "ok. 1 mila (ok. 1,6 km)" };
   const line = (o) => describeToolResult({ step: 1, name: "przestepczosc", input: { kodPocztowy: "M1 1AE" }, kind: "ok", output: o });
   check("Opis kroku: poza obszarem", line({ ...base, obszarDzialaniaAmber: "poza_obszarem" }) === "przestepczosc (M1 1AE, wrzesień 2026): 1234 zgłoszeń w promieniu ok. 1 mila (ok. 1,6 km); prawdopodobnie poza obszarem działania firmy", line({ ...base, obszarDzialaniaAmber: "poza_obszarem" }));

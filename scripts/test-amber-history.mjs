@@ -443,7 +443,10 @@ console.log("\n=== CZĘŚĆ 8 (Warsztat 3): odpowiedzi czatu z /api/agent – po
   { const m = clone(agentConversation()); m[1].parts.push({ type: "reasoning", text: "..." }); reject("v5: część reasoning", m); }
   { const m = clone(agentConversation()); m[1].parts.push({ type: "file", mediaType: "image/png", url: "data:image/png;base64,AAAA" }); reject("v5: część file w odpowiedzi Amber", m); }
   { const m = clone(agentConversation()); delete m[1].parts[1].toolCallId; reject("v5: część narzędzia bez identyfikatora", m); }
-  { const m = clone(agentConversation()); for (let i = 0; i < 11; i++) m[1].parts.push({ type: "tool-aktualnyCzas", toolCallId: `c${i}` }); reject("v5: za dużo części narzędzi (11)", m); }
+  // Warsztat 2 (Standard): limit części narzędzi 16 (= limit wywołań narzędzi w jednym zadaniu).
+  { const m = clone(agentConversation()); for (let i = 0; i < 15; i++) m[1].parts.push({ type: "tool-aktualnyCzas", toolCallId: `c${i}` }); accept("v5: 16 części narzędzi (limit)", m); }
+  { const m = clone(agentConversation()); for (let i = 0; i < 16; i++) m[1].parts.push({ type: "tool-aktualnyCzas", toolCallId: `c${i}` }); reject("v5: za dużo części narzędzi (17)", m); }
+  { const m = clone(agentConversation()); m[1].metadata.stats = { kroki: 1, narzedzia: 1, czasMs: 1 }; reject("v5: liczniki (stats) w historii – nie są podpisane", m); }
   {
     const turns = [{ role: "user", text: Q }, { role: "assistant", text: "" }];
     const sig = signAgentChatTurn(KEY, SESSION_A, turns, INFO);

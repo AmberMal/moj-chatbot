@@ -11,6 +11,7 @@ import {
   NO_IMAGE_MESSAGE,
   STEP_LIMIT_MESSAGE,
   buildStepList,
+  formatAgentStats,
   formatStepList,
   buildImageRequest,
   hasImageToolPart,
@@ -371,6 +372,9 @@ export default function Chat() {
               )}
               {message.role === "assistant" && meta?.model && (
                 <small className="model-id">model: {meta.model}</small>
+              )}
+              {message.role === "assistant" && formatAgentStats(message.metadata) && (
+                <small className="agent-stats">{formatAgentStats(message.metadata)}</small>
               )}
               {message.role === "assistant" && noImageIds.includes(message.id) && (
                 <small className="image-error step-limit">{NO_IMAGE_MESSAGE}</small>

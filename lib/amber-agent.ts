@@ -71,18 +71,34 @@ const LABEL_ORDER = [
 export const AGENT_STEP_LIMIT = 6;
 export const stepLimitMessage = (limit: number) => `Zatrzymałem się po ${limit} krokach`;
 
-// Lekcja 4 – limit wywołań narzędzi w jednej odpowiedzi (= limit części narzędzi w historii, 10).
+// Lekcja 4 – limit wywołań narzędzi w jednym zadaniu (= limit części narzędzi w historii, 16).
+// Warsztat 2 (Standard): najwyżej 16 wywołań narzędzi na zadanie – liczone osobno od limitu 6 kroków modelu.
 // Warstwa A: wywołanie ponad limit NIE jest wykonywane – model dostaje tylko komunikat o pominięciu,
 //            a przeglądarka nie dostaje jego części. Nic, z czego model skorzystał, nie jest ukrywane.
 //            Jedno miejsce jest zawsze zarezerwowane dla obrazu (generujObraz).
 // Warstwa B: po AGENT_TOOL_SOFT_LIMIT wywołaniach kolejne kroki nie mogą używać narzędzi (toolChoice: "none").
 // Musi być równe MAX_AGENT_TOOL_PARTS z lib/amber-history.ts (sprawdza to test; pliki lib/ nie importują się w czasie działania).
-export const AGENT_TOOL_CALL_LIMIT = 10;
-export const AGENT_TOOL_SOFT_LIMIT = 8;
+export const AGENT_TOOL_CALL_LIMIT = 16;
+export const AGENT_TOOL_SOFT_LIMIT = 14;
 const IMAGE_TOOL_NAME = "generujObraz";
 export const TOOL_SKIPPED_MESSAGE =
   "Pominięto: osiągnięto limit narzędzi w jednej odpowiedzi. Odpowiedz na podstawie dotychczasowych wyników " +
   "i powiedz klientowi, czego nie sprawdziłaś – może zapytać o to w kolejnej wiadomości.";
+
+// Lekcja 4, Warsztat 2 (Standard): limity czasu.
+// – całe zadanie: najwyżej 60 s. Po 45 s model nie dostaje już narzędzi (ma odpowiedzieć tym, co wie);
+//   po 60 s serwer przerywa model i dopisuje podsumowanie z rzeczywistych wyników narzędzi (wynik częściowy);
+// – jedno narzędzie: najwyżej 10 s czekania na wynik, potem „Źródło nie odpowiada”
+//   (bez generujObraz – generowanie obrazu trwa dłużej; obejmuje je limit 60 s całego zadania).
+export const AGENT_TASK_TIMEOUT_MS = 60_000;
+export const AGENT_TASK_SOFT_DEADLINE_MS = 45_000;
+export const AGENT_TOOL_TIMEOUT_MS = 10_000;
+export const TOOL_TIMEOUT_EXCLUDED = [IMAGE_TOOL_NAME] as const;
+export const SOURCE_TIMEOUT_MESSAGE = "Źródło nie odpowiada";
+export const TOOL_REPEAT_MESSAGE =
+  "Pominięto: to samo wywołanie już się nie powiodło – nie powtarzam go. Odpowiedz na podstawie dotychczasowych " +
+  "wyników i powiedz klientowi wprost, czego nie udało się sprawdzić.";
+export const taskTimeoutMessage = (ms: number) => `Przerwałam zadanie po ${Math.round(ms / 1000)} sekundach (limit czasu)`;
 
 // Wspólny „budżet” wywołań jednej odpowiedzi. Decyzja dla danego toolCallId zapada raz i jest stała –
 // tak samo widzi ją filtr strumienia (części dla przeglądarki) i wykonanie narzędzia.
@@ -133,6 +149,96 @@ export function withToolBudget(tools: ToolSet, budget: ToolBudget): ToolSet {
   }
   return wrapped;
 }
+
+// Warsztat 2 (Standard): nieudane wywołania (ok: false, wyjątek, przekroczony czas) są zapamiętywane.
+// Ponowne IDENTYCZNE wywołanie (ta sama nazwa i te same dane) nie jest wykonywane, a kolejny krok
+// modelu dostaje toolChoice: "none" – agent kończy z wynikiem częściowym zamiast powtarzać błąd w pętli.
+// executed – liczba faktycznie wykonanych wywołań (licznik pod odpowiedzią).
+export function createToolGuard() {
+  const failed = new Set<string>();
+  let executed = 0;
+  let blockedRepeats = 0;
+  const key = (name: string, input: unknown) => `${name}|${JSON.stringify(input ?? null)}`;
+  return {
+    isRepeatOfFailure: (name: string, input: unknown) => failed.has(key(name, input)),
+    recordFailure: (name: string, input: unknown) => void failed.add(key(name, input)),
+    countExecution: () => void executed++,
+    countBlockedRepeat: () => void blockedRepeats++,
+    get executed() {
+      return executed;
+    },
+    get blockedRepeats() {
+      return blockedRepeats;
+    },
+  };
+}
+export type ToolGuard = ReturnType<typeof createToolGuard>;
+
+const isFailedResult = (output: unknown) => {
+  const o = output as { ok?: unknown; pominieto?: unknown } | null;
+  return typeof o === "object" && o !== null && o.ok === false && o.pominieto !== true;
+};
+
+// Nakładka na narzędzia z naszym kodem (execute): blokada powtórzeń + limit czasu jednego narzędzia.
+// Przekroczony czas → wynik { ok: false, komunikat: "Źródło nie odpowiada" } (zwykły wynik, nie błąd aplikacji).
+export function withToolGuards(
+  tools: ToolSet,
+  guard: ToolGuard,
+  timeoutMs: number = AGENT_TOOL_TIMEOUT_MS,
+  excluded: readonly string[] = TOOL_TIMEOUT_EXCLUDED,
+): ToolSet {
+  const wrapped: ToolSet = {};
+  for (const [name, original] of Object.entries(tools)) {
+    type Exec = (input: unknown, options: { toolCallId: string; abortSignal?: AbortSignal }) => unknown;
+    const execute = (original as { execute?: Exec }).execute;
+    if (typeof execute !== "function") {
+      wrapped[name] = original;
+      continue;
+    }
+    wrapped[name] = {
+      ...original,
+      execute: async (input: unknown, options: { toolCallId: string; abortSignal?: AbortSignal }) => {
+        if (guard.isRepeatOfFailure(name, input)) {
+          guard.countBlockedRepeat();
+          return { ok: false, pominieto: true, powtorzenie: true, komunikat: TOOL_REPEAT_MESSAGE };
+        }
+        guard.countExecution();
+        const run = async () => execute.call(original, input, options);
+        let output: unknown;
+        try {
+          if (excluded.includes(name)) {
+            output = await run();
+          } else {
+            const controller = new AbortController();
+            const signal = options.abortSignal ? AbortSignal.any([options.abortSignal, controller.signal]) : controller.signal;
+            let timer: ReturnType<typeof setTimeout> | undefined;
+            const timeout = new Promise<{ ok: false; komunikat: string }>((resolve) => {
+              timer = setTimeout(() => {
+                controller.abort();
+                resolve({ ok: false, komunikat: SOURCE_TIMEOUT_MESSAGE });
+              }, timeoutMs);
+            });
+            try {
+              output = await Promise.race([execute.call(original, input, { ...options, abortSignal: signal }), timeout]);
+            } finally {
+              clearTimeout(timer);
+            }
+          }
+        } catch (error) {
+          guard.recordFailure(name, input);
+          throw error;
+        }
+        if (isFailedResult(output)) guard.recordFailure(name, input);
+        return output;
+      },
+    } as ToolSet[string];
+  }
+  return wrapped;
+}
+
+// Liczniki pod odpowiedzią (tylko do wyświetlenia – NIE są podpisywane; przeglądarka usuwa je z historii).
+export type AgentStats = { kroki: number; narzedzia: number; czasMs: number };
+
 const MAX_STREAM_SOURCES = 6;
 
 export const AGENT_MESSAGES = {
@@ -169,11 +275,15 @@ export type AgentDeps = {
   maxRetries?: number;
   // Limit kroków (domyślnie AGENT_STEP_LIMIT = 6). Inna wartość tylko w testach.
   stepLimit?: number;
+  // Warsztat 2 (Standard): limity czasu (domyślnie 60 s / 45 s / 10 s). Inne wartości tylko w testach.
+  taskTimeoutMs?: number;
+  taskSoftDeadlineMs?: number;
+  toolTimeoutMs?: number;
   now?: () => Date;
   log?: (message: string) => void;
 };
 
-type AgentMetadata = { kind: "chat"; sig: string; fetchedAt?: string; tools?: string[]; model?: string };
+type AgentMetadata = { kind: "chat"; sig: string; fetchedAt?: string; tools?: string[]; model?: string; stats?: AgentStats };
 type AgentUIMessage = UIMessage<AgentMetadata>;
 
 function text(message: string, status: number): Response {
@@ -303,6 +413,12 @@ export function describeToolResult(r: StepResult): string | null {
 }
 
 export function buildStepLimitSummary(limit: number, results: StepResult[], searched: boolean): string {
+  return buildPartialSummary(stepLimitMessage(limit), results, searched);
+}
+
+// Wynik częściowy: nagłówek („Zatrzymałem się po N krokach” albo „Przerwałam zadanie po 60 sekundach…”)
+// i lista rzeczywistych wyników narzędzi.
+export function buildPartialSummary(header: string, results: StepResult[], searched: boolean): string {
   const seen = new Set<string>();
   const lines: string[] = [];
   for (const r of results) {
@@ -314,9 +430,9 @@ export function buildStepLimitSummary(limit: number, results: StepResult[], sear
   }
   if (searched) lines.push("– wyszukiwanie: źródła są pod odpowiedzią");
   if (lines.length === 0) {
-    return `${stepLimitMessage(limit)}. Nie udało się jeszcze ustalić wyników – proszę zadać pytanie prościej lub w kilku częściach.`;
+    return `${header}. Nie udało się jeszcze ustalić wyników – proszę zadać pytanie prościej lub w kilku częściach.`;
   }
-  return `${stepLimitMessage(limit)}. Udało się ustalić:\n${lines.join("\n")}`;
+  return `${header}. Udało się ustalić:\n${lines.join("\n")}`;
 }
 
 export function createAgentHandler(deps: AgentDeps) {
@@ -324,6 +440,8 @@ export function createAgentHandler(deps: AgentDeps) {
   const now = deps.now ?? (() => new Date());
 
   return async function handleAgentRequest(req: Request): Promise<Response> {
+    // Warsztat 2 (Standard): czas zadania liczony od przyjęcia zapytania.
+    const startedAt = Date.now();
     // 1. Najpierw sesja. Bez ważnej sesji: 401 – przed odczytem treści i przed wywołaniem modelu.
     const session = deps.getSession(req);
     if (!session) return text(AGENT_MESSAGES.unauthorized, 401);
@@ -394,7 +512,7 @@ export function createAgentHandler(deps: AgentDeps) {
       return Response.json({ analysis: result.output, ...(result.modelId ? { model: result.modelId } : {}) });
     }
 
-    return streamChat({ req, deps, models, turns, historyKey: historyKey!, sessionId, log, now });
+    return streamChat({ req, deps, models, turns, historyKey: historyKey!, sessionId, log, now, startedAt });
   };
 }
 
@@ -408,6 +526,7 @@ function streamChat({
   sessionId,
   log,
   now,
+  startedAt,
 }: {
   req: Request;
   deps: AgentDeps;
@@ -417,20 +536,33 @@ function streamChat({
   sessionId: string;
   log: (message: string) => void;
   now: () => Date;
+  startedAt: number;
 }): Response {
   const askedAboutImage = Boolean(turns[turns.length - 1]?.image);
   const budget = createToolBudget();
+  const guard = createToolGuard();
   const stepLimit = deps.stepLimit ?? AGENT_STEP_LIMIT;
+  const taskTimeoutMs = deps.taskTimeoutMs ?? AGENT_TASK_TIMEOUT_MS;
+  const softDeadlineMs = deps.taskSoftDeadlineMs ?? AGENT_TASK_SOFT_DEADLINE_MS;
+  const elapsed = () => Date.now() - startedAt;
+
+  // Twardy limit 60 s: własny sygnał (żeby odróżnić przekroczenie czasu od zamknięcia karty przez klienta).
+  const taskController = new AbortController();
+  const taskTimer = setTimeout(() => taskController.abort(), Math.max(0, taskTimeoutMs - elapsed()));
 
   const result = streamText({
     model: models.model,
     instructions: deps.instructions.chat,
     messages: toModelMessages(turns),
-    tools: withToolBudget(models.tools, budget),
+    tools: withToolBudget(withToolGuards(models.tools, guard, deps.toolTimeoutMs ?? AGENT_TOOL_TIMEOUT_MS), budget),
     stopWhen: isStepCount(stepLimit),
-    // Warstwa B: po 8 wywołaniach model ma już odpowiedzieć tekstem (bez kolejnych narzędzi).
-    prepareStep: () => (budget.used >= AGENT_TOOL_SOFT_LIMIT ? { toolChoice: "none" as const } : {}),
-    abortSignal: req.signal,
+    // Warstwa B: po 14 wywołaniach, po 45 s zadania albo po próbie powtórzenia nieudanego wywołania
+    // model ma już odpowiedzieć tekstem (bez kolejnych narzędzi) – z dostępnym wynikiem częściowym.
+    prepareStep: () =>
+      budget.used >= AGENT_TOOL_SOFT_LIMIT || elapsed() >= softDeadlineMs || guard.blockedRepeats > 0
+        ? { toolChoice: "none" as const }
+        : {},
+    abortSignal: AbortSignal.any([req.signal, taskController.signal]),
     maxRetries: deps.maxRetries,
   });
 
@@ -466,6 +598,8 @@ function streamChat({
       };
       let hadError = false;
       let finishReason: string | undefined;
+      let modelSteps = 0; // Standard: liczba wywołań modelu (rozpoczętych kroków)
+      const openTexts = new Set<string>();
 
       for await (const chunk of result.toUIMessageStream<AgentUIMessage>({
         sendSources: true,
@@ -482,6 +616,7 @@ function streamChat({
           case "text-start":
             step.textOrder.push(chunk.id);
             step.texts.set(chunk.id, "");
+            openTexts.add(chunk.id);
             send(chunk);
             break;
           case "text-delta":
@@ -537,12 +672,21 @@ function streamChat({
           case "tool-output-denied":
             if (allowedCalls.has(chunk.toolCallId)) send(chunk);
             break;
-          case "start":
           case "start-step":
-          case "text-end":
-          case "finish-step":
-          case "abort":
+            modelSteps++;
             send(chunk);
+            break;
+          case "text-end":
+            openTexts.delete(chunk.id);
+            send(chunk);
+            break;
+          case "start":
+          case "finish-step":
+            send(chunk);
+            break;
+          case "abort":
+            // Przekroczony limit 60 s: dalej serwer dopisze wynik częściowy (bez znacznika „abort” dla przeglądarki).
+            if (!taskController.signal.aborted || req.signal.aborted) send(chunk);
             break;
           case "reset-step":
             step = newStep();
@@ -566,24 +710,50 @@ function streamChat({
         }
       }
       done.push(step);
+      clearTimeout(taskTimer);
+      // Przekroczony limit 60 s (a nie zamknięcie karty przez klienta).
+      const timedOut = taskController.signal.aborted && !req.signal.aborted;
 
-      // Bez podpisu, gdy odpowiedź jest niepełna (błąd lub przerwanie) – takiej odpowiedzi nie da się użyć w historii.
-      if (hadError || req.signal.aborted) {
+      // Bez podpisu, gdy odpowiedź jest niepełna (błąd lub przerwanie przez klienta) – takiej odpowiedzi nie da się użyć w historii.
+      if ((hadError && !timedOut) || req.signal.aborted) {
         writer.write({ type: "finish", finishReason: "error" });
         return;
       }
 
       // „tool-calls” na końcu = model chciał dalej używać narzędzi, ale pętla doszła do limitu kroków.
       let finalReason = finishReason;
-      try {
-        finalReason = (await result.finishReason) ?? finalReason;
-      } catch {
-        // brak informacji – zostaje wartość ze strumienia
+      if (!timedOut) {
+        try {
+          finalReason = (await result.finishReason) ?? finalReason;
+        } catch {
+          // brak informacji – zostaje wartość ze strumienia
+        }
       }
+      // Tekst przerwany w połowie (limit czasu) – zamykamy go, żeby przeglądarka zapisała go w całości.
+      for (const id of openTexts) writer.write({ type: "text-end", id });
       const stepTexts = done.map((s) => s.textOrder.map((id) => s.texts.get(id) ?? "").join(""));
       const modelText = stepTexts.join("");
-      const reachedLimit = finalReason === "tool-calls" && stepCount >= stepLimit;
+      const reachedLimit = !timedOut && finalReason === "tool-calls" && stepCount >= stepLimit;
       let replyText = modelText;
+      if (timedOut) {
+        // Limit 60 s: wynik częściowy wyłącznie z rzeczywistych wyników narzędzi.
+        // Tekst przerwanego (nieukończonego) kroku nie opisuje wcześniejszych wyników – liczą się tylko ukończone kroki.
+        const lastTextStep = stepTexts.reduce((last, t, i) => (i < stepCount && t.trim() ? i : last), -1);
+        const searchedAfter = done.slice(Math.max(lastTextStep, 0)).some((s) => s.searchSources > 0);
+        const summary = buildPartialSummary(
+          taskTimeoutMessage(taskTimeoutMs),
+          results.filter((r) => r.step >= lastTextStep),
+          searchedAfter,
+        );
+        const limitText = (modelText.trim() ? "\n\n" : "") + summary;
+        const id = "amber-time-limit";
+        writer.write({ type: "text-start", id });
+        writer.write({ type: "text-delta", id, delta: limitText });
+        writer.write({ type: "text-end", id });
+        replyText = modelText + limitText;
+        finalReason = "stop";
+        log(`[Amber] /api/agent – ${taskTimeoutMessage(taskTimeoutMs)} (podsumowanie: ${results.length} wyników).`);
+      }
       if (reachedLimit) {
         // Wariant B: podsumowanie wyłącznie z rzeczywistych wyników; tylko to, czego model jeszcze nie napisał.
         const lastTextStep = stepTexts.reduce((last, t, i) => (t.trim() ? i : last), -1);
@@ -614,17 +784,20 @@ function streamChat({
         [...turns, { role: "assistant", text: replyText }],
         { sources, fetchedAt, tools, model },
       );
+      const stats: AgentStats = { kroki: modelSteps, narzedzia: guard.executed, czasMs: elapsed() };
       const metadata: AgentMetadata = {
         kind: "chat",
         sig,
         ...(fetchedAt ? { fetchedAt } : {}),
         ...(tools.length > 0 ? { tools } : {}),
         ...(model ? { model } : {}),
+        stats,
       };
 
       if (sources.length > 0) log(`[Amber] /api/agent – źródła (${sources.length}): ${sources.map((s) => s.url).join(" | ")}`);
       if (tools.length > 0) log(`[Amber] /api/agent – użyte narzędzia: ${tools.join(", ")}`);
       if (askedAboutImage) log(`[Amber] /api/agent – zdjęcie przeanalizował model: ${model || "(brak w odpowiedzi API)"}`);
+      log(`[Amber] /api/agent – kroki modelu: ${stats.kroki}, wywołania narzędzi: ${stats.narzedzia}, czas: ${stats.czasMs} ms`);
 
       writer.write({ type: "finish", finishReason: (finalReason as "stop") ?? "stop", messageMetadata: metadata });
     },

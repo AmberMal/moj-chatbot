@@ -2,11 +2,18 @@
 // Uruchomienie (w folderze projektu):
 //   node --experimental-strip-types scripts/test-amber-tools.mjs
 
-import { readUIMessageStream } from "ai";
+import { jsonSchema, readUIMessageStream, tool } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 import { readFileSync } from "node:fs";
 import {
   AGENT_STEP_LIMIT,
+  AGENT_TASK_SOFT_DEADLINE_MS,
+  AGENT_TASK_TIMEOUT_MS,
+  AGENT_TOOL_TIMEOUT_MS,
+  SOURCE_TIMEOUT_MESSAGE,
+  TOOL_REPEAT_MESSAGE,
+  TOOL_TIMEOUT_EXCLUDED,
+  taskTimeoutMessage,
   AGENT_TOOL_CALL_LIMIT,
   AGENT_TOOL_SOFT_LIMIT,
   TOOL_SKIPPED_MESSAGE,
@@ -17,7 +24,7 @@ import {
 } from "../lib/amber-agent.ts";
 import { MockImageModelV4 } from "ai/test";
 import { IMAGE_MODEL_ID, createImageTool } from "../lib/amber-image.ts";
-import { buildStepList, formatStepList, prepareAgentMessages, STEP_LIMIT_MESSAGE } from "../lib/amber-chat-client.ts";
+import { buildStepList, formatAgentStats, formatStepList, prepareAgentMessages, STEP_LIMIT_MESSAGE } from "../lib/amber-chat-client.ts";
 import { SESSION_COOKIE, createSessionToken, isSessionValid, readCookie } from "../lib/auth.ts";
 import { AMBER_ANALYZE_INSTRUCTIONS, AMBER_CHAT_INSTRUCTIONS, AMBER_CHAT_INSTRUCTIONS_DEV } from "../lib/amber-instructions.ts";
 import { generateAmberOutput } from "../lib/amber-output.ts";
@@ -34,6 +41,7 @@ import {
   createCrimeTool,
   crimeMonthLabel,
   getCrimeStats,
+  SOURCE_TIMEOUT,
   FORECAST_DAYS,
   createCurrencyTool,
   createHolidaysTool,
@@ -167,7 +175,9 @@ const EUR = { table: "A", currency: "euro", code: "EUR", rates: [{ no: "220/A/NB
   for (const [name, reply] of [["HTTP 500", status(500)], ["HTTP 503", status(503)], ["HTTP 429", status(429)], ["brak sieci", networkDown], ["zły JSON", new Response("<html>", { status: 200 })], ["timeout", neverAnswers]]) {
     const f = fakeFetch([["/rates/A/USD/", reply], ["/rates/B/USD/", USD_B_OLD]]);
     const r = await getCurrency({ waluta: "USD" }, { fetch: f, now, timeoutMs: 30 });
-    check(`Tabela A: ${name} → „NBP nie odpowiada”, BEZ przejścia do tabeli B`, !r.ok && r.komunikat === "Serwis NBP nie odpowiada. Spróbuj ponownie za chwilę." && f.calls.length === 1 && !f.calls.some((c) => c.url.includes("/rates/B/")), `${f.calls.length} zapytań`);
+    // Warsztat 2 (Standard, D3): przekroczony czas → „Źródło nie odpowiada (NBP).”; inne błędy bez zmian.
+    const expected = name === "timeout" ? "Źródło nie odpowiada (NBP)." : "Serwis NBP nie odpowiada. Spróbuj ponownie za chwilę.";
+    check(`Tabela A: ${name} → „${expected}”, BEZ przejścia do tabeli B`, !r.ok && r.komunikat === expected && f.calls.length === 1 && !f.calls.some((c) => c.url.includes("/rates/B/")), `${f.calls.length} zapytań: ${r.komunikat}`);
   }
   {
     const f = fakeFetch([["/rates/A/USD/", { table: "A", code: "USD", rates: [] }], ["/rates/B/USD/", USD_B_OLD]]);
@@ -408,7 +418,10 @@ async function readChat(response) {
   const chunks = raw.split("\n").filter((l) => l.startsWith("data: ") && l !== "data: [DONE]").map((l) => JSON.parse(l.slice(6)));
   let message;
   for await (const m of readUIMessageStream({ stream: streamOf(chunks) })) message = m;
-  return { raw, message: { ...message, role: "assistant" } };
+  // Warsztat 2 (Standard): liczniki (metadata.stats) służą tylko do wyświetlenia – przeglądarka nie odsyła ich
+  // w historii (prepareAgentMessages), więc tu też je oddzielamy. Serwer odrzuca historię z polem stats (test niżej).
+  const { stats, ...metadata } = message?.metadata ?? {};
+  return { raw, stats, message: { ...message, role: "assistant", ...(message?.metadata ? { metadata } : {}) } };
 }
 const user = (id, text) => ({ id, role: "user", parts: [{ type: "text", text }] });
 const output = (message, name) => message.parts.find((p) => p.type === `tool-${name}`)?.output;
@@ -488,7 +501,8 @@ const output = (message, name) => message.parts.find((p) => p.type === `tool-${n
 }
 
 console.log("\n=== 10. Limit narzędzi w jednej odpowiedzi (warstwy A, B, C) ===");
-check(`Limit wywołań = limit części w historii (${MAX_AGENT_TOOL_PARTS})`, AGENT_TOOL_CALL_LIMIT === MAX_AGENT_TOOL_PARTS && AGENT_TOOL_SOFT_LIMIT === 8);
+// Warsztat 2 (Standard, D1): limit 16 wywołań na zadanie, warstwa B po 14.
+check(`Limit wywołań = limit części w historii (${MAX_AGENT_TOOL_PARTS})`, AGENT_TOOL_CALL_LIMIT === MAX_AGENT_TOOL_PARTS && AGENT_TOOL_CALL_LIMIT === 16 && AGENT_TOOL_SOFT_LIMIT === 14);
 {
   const b = createToolBudget(10);
   const res = Array.from({ length: 12 }, (_, i) => b.admit(`p${i}`, "pogoda"));
@@ -496,7 +510,8 @@ check(`Limit wywołań = limit części w historii (${MAX_AGENT_TOOL_PARTS})`, A
   check("Budżet: decyzja stała dla tego samego wywołania", b.admit("p0", "pogoda") === true && b.admit("p11", "pogoda") === false);
   check("Budżet: obraz nadal przyjęty (zarezerwowane miejsce)", b.admit("img", "generujObraz") === true && b.admit("img2", "generujObraz") === false && b.admitted === 10);
 }
-const CITIES = ["Londyn", "Warszawa", "Paryż", "Berlin", "Madryt", "Rzym", "Wiedeń", "Praga", "Oslo", "Dublin", "Lizbona", "Ateny"];
+// 20 miast: 15 wykonanych (16. miejsce zarezerwowane dla obrazu), 5 pominiętych.
+const CITIES = ["Londyn", "Warszawa", "Paryż", "Berlin", "Madryt", "Rzym", "Wiedeń", "Praga", "Oslo", "Bruksela", "Amsterdam", "Kopenhaga", "Sztokholm", "Helsinki", "Budapeszt", "Dublin", "Lizbona", "Ateny", "Wilno", "Ryga"];
 const executedCities = [];
 const countingWeather = () => {
   const t = createWeatherTool({ fetch: API_FETCH, now });
@@ -519,31 +534,32 @@ function limitHandler(model, extraTools = {}) {
   });
 }
 {
-  // 12 równoczesnych wywołań pogody w jednym kroku.
+  // 20 równoczesnych wywołań pogody w jednym kroku.
   executedCities.length = 0;
   const model = chatModel([
     [...CITIES.map((m, i) => call(`w${i}`, "pogoda", { miasto: m, data: "2026-11-13" })), toolCallsFinish],
-    [...textChunks("Prognoza dla 9 miast. Dla Dublina, Lizbony i Aten zapytaj w kolejnej wiadomości."), stop],
+    [...textChunks("Prognoza dla 15 miast. Dla Dublina, Lizbony, Aten, Wilna i Rygi zapytaj w kolejnej wiadomości."), stop],
   ]);
-  const res = await limitHandler(model)(request({ mode: "chat", messages: [user("u1", "Pogoda w 12 miastach")] }));
-  const { message, raw } = await readChat(res);
+  const res = await limitHandler(model)(request({ mode: "chat", messages: [user("u1", "Pogoda w 20 miastach")] }));
+  const { message, raw, stats } = await readChat(res);
   const parts = message.parts.filter((p) => p.type.startsWith("tool-"));
-  check("12 wywołań: status 200, odpowiedź podpisana", res.status === 200 && typeof message.metadata?.sig === "string");
-  check("12 wywołań: przeglądarka dostała 9 części (≤ 10)", parts.length === 9, String(parts.length));
-  check("12 wywołań: wykonano dokładnie 9 (te same co pokazane)", executedCities.length === 9 && parts.every((p) => executedCities.includes(p.input?.miasto)), executedCities.join());
-  check("12 wywołań: każda pokazana część ma pełny wynik", parts.every((p) => p.state === "output-available" && p.output?.ok === true));
-  check("12 wywołań: niewykonane (w9–w11) nie są w przeglądarce", !raw.includes('"w9"') && !raw.includes('"w10"') && !raw.includes('"w11"'));
+  check("20 wywołań: status 200, odpowiedź podpisana", res.status === 200 && typeof message.metadata?.sig === "string");
+  check("20 wywołań: przeglądarka dostała 15 części (≤ 16)", parts.length === 15, String(parts.length));
+  check("20 wywołań: wykonano dokładnie 15 (te same co pokazane)", executedCities.length === 15 && parts.every((p) => executedCities.includes(p.input?.miasto)), executedCities.join());
+  check("20 wywołań: każda pokazana część ma pełny wynik", parts.every((p) => p.state === "output-available" && p.output?.ok === true));
+  check("20 wywołań: niewykonane (w15–w19) nie są w przeglądarce", ["w15", "w16", "w17", "w18", "w19"].every((id) => !raw.includes(`"${id}"`)));
   const prompt2 = JSON.stringify(model.doStreamCalls[1].prompt);
-  check("12 wywołań: model dostał 9 wyników i 3 komunikaty o pominięciu (bez danych pogody)",
-    (prompt2.match(/Pominięto: osiągnięto limit narzędzi/g) ?? []).length === 3 && (prompt2.match(/Open-Meteo/g) ?? []).length === 9);
-  check("12 wywołań: etykieta pogoda (tylko wykonane narzędzia)", JSON.stringify(message.metadata?.tools) === JSON.stringify(["pogoda"]));
-  check("Warstwa B: po 8 wywołaniach kolejny krok bez narzędzi (toolChoice: none)", model.doStreamCalls[1].toolChoice?.type === "none", JSON.stringify(model.doStreamCalls[1].toolChoice));
-  check("Historia serwera (pełne części) też przechodzi kontrolę", checkChatHistory([user("u1", "Pogoda w 12 miastach"), message, user("u2", "Dalej")], { key: deriveHistoryKey(AUTH.secret), sessionId: sessionIdFromToken(TOKEN) }).ok === true);
+  check("20 wywołań: model dostał 15 wyników i 5 komunikatów o pominięciu (bez danych pogody)",
+    (prompt2.match(/Pominięto: osiągnięto limit narzędzi/g) ?? []).length === 5 && (prompt2.match(/Open-Meteo/g) ?? []).length === 15);
+  check("20 wywołań: etykieta pogoda (tylko wykonane narzędzia)", JSON.stringify(message.metadata?.tools) === JSON.stringify(["pogoda"]));
+  check("20 wywołań: liczniki – 2 kroki modelu, 15 wywołań narzędzi", stats?.kroki === 2 && stats?.narzedzia === 15, JSON.stringify(stats));
+  check("Warstwa B: po 14 wywołaniach kolejny krok bez narzędzi (toolChoice: none)", model.doStreamCalls[1].toolChoice?.type === "none", JSON.stringify(model.doStreamCalls[1].toolChoice));
+  check("Historia serwera (pełne części) też przechodzi kontrolę", checkChatHistory([user("u1", "Pogoda w 20 miastach"), message, user("u2", "Dalej")], { key: deriveHistoryKey(AUTH.secret), sessionId: sessionIdFromToken(TOKEN) }).ok === true);
 
   // Kolejna wiadomość w tej samej rozmowie – tak jak wysyła przeglądarka (prepareAgentMessages).
-  const sent = prepareAgentMessages([user("u1", "Pogoda w 12 miastach"), message, user("u2", "A Dublin, Lizbona i Ateny?")]);
+  const sent = prepareAgentMessages([user("u1", "Pogoda w 20 miastach"), message, user("u2", "A Dublin, Lizbona i Ateny?")]);
   check("Warstwa C: przeglądarka odsyła odpowiedź bez części narzędzi", !sent[1].parts.some((p) => p.type.startsWith("tool-")) && sent[1].metadata?.sig === message.metadata.sig);
-  check("Warstwa C: widok rozmowy bez zmian (części zostają w przeglądarce)", message.parts.filter((p) => p.type.startsWith("tool-")).length === 9);
+  check("Warstwa C: widok rozmowy bez zmian (części zostają w przeglądarce)", message.parts.filter((p) => p.type.startsWith("tool-")).length === 15);
   executedCities.length = 0;
   const model2 = chatModel([
     [call("x1", "pogoda", { miasto: "Dublin", data: "2026-11-13" }), call("x2", "pogoda", { miasto: "Lizbona", data: "2026-11-13" }), call("x3", "pogoda", { miasto: "Ateny", data: "2026-11-13" }), toolCallsFinish],
@@ -554,39 +570,40 @@ function limitHandler(model, extraTools = {}) {
   check("Kolejna wiadomość: 200, nowy limit (3 wywołania wykonane)", r2.status === 200 && executedCities.length === 3 && m2.parts.filter((p) => p.type === "tool-pogoda").length === 3);
   check("Kolejna wiadomość: odpowiedź podpisana", typeof m2.metadata?.sig === "string");
   const prompt = JSON.stringify(model2.doStreamCalls[0].prompt);
-  check("Kolejna wiadomość: model widzi wcześniejszą odpowiedź (ciągłość)", prompt.includes("Prognoza dla 9 miast."));
+  check("Kolejna wiadomość: model widzi wcześniejszą odpowiedź (ciągłość)", prompt.includes("Prognoza dla 15 miast."));
   // Trzecia tura – cała historia (2 odpowiedzi) nadal poprawna, także w pełnej postaci.
   const sent3 = prepareAgentMessages([...sent, m2, user("u3", "Dziękuję")]);
   const r3 = await limitHandler(chatModel([[...textChunks("Proszę bardzo."), stop]]))(request({ mode: "chat", messages: sent3 }));
   check("Trzecia wiadomość w tej samej rozmowie → 200", r3.status === 200);
-  const r3full = await limitHandler(chatModel([[...textChunks("Proszę bardzo."), stop]]))(request({ mode: "chat", messages: [user("u1", "Pogoda w 12 miastach"), message, user("u2", "A Dublin, Lizbona i Ateny?"), m2, user("u3", "Dziękuję")] }));
+  const r3full = await limitHandler(chatModel([[...textChunks("Proszę bardzo."), stop]]))(request({ mode: "chat", messages: [user("u1", "Pogoda w 20 miastach"), message, user("u2", "A Dublin, Lizbona i Ateny?"), m2, user("u3", "Dziękuję")] }));
   check("Ta sama rozmowa z pełnymi częściami (stara przeglądarka) → 200", r3full.status === 200);
 }
 {
-  // Obraz + 11 innych wywołań – obraz zawsze ma miejsce i jest pokazany.
+  // Obraz + 19 innych wywołań – obraz zawsze ma miejsce i jest pokazany.
   executedCities.length = 0;
   const model = chatModel([
-    [...CITIES.slice(0, 11).map((m, i) => call(`w${i}`, "pogoda", { miasto: m })), call("img", "generujObraz", { opis: "Kamera CCTV na ścianie domu" }), toolCallsFinish],
+    [...CITIES.slice(0, 19).map((m, i) => call(`w${i}`, "pogoda", { miasto: m })), call("img", "generujObraz", { opis: "Kamera CCTV na ścianie domu" }), toolCallsFinish],
     [...textChunks("Obraz jest gotowy."), stop],
   ]);
   const { message } = await readChat(await limitHandler(model)(request({ mode: "chat", messages: [user("u1", "Proszę wygenerować obraz: kamera CCTV")] })));
   const img = message.parts.find((p) => p.type === "tool-generujObraz");
-  check("Obraz + 11 innych: obraz wygenerowany i pokazany", img?.state === "output-available" && img?.output?.ok === true, JSON.stringify(img?.output)?.slice(0, 80));
-  check("Obraz + 11 innych: razem 10 części (9 + obraz)", message.parts.filter((p) => p.type.startsWith("tool-")).length === 10 && executedCities.length === 9);
-  check("Obraz + 11 innych: etykiety pogoda i generujObraz", JSON.stringify(message.metadata?.tools) === JSON.stringify(["pogoda", "generujObraz"]));
+  check("Obraz + 19 innych: obraz wygenerowany i pokazany", img?.state === "output-available" && img?.output?.ok === true, JSON.stringify(img?.output)?.slice(0, 80));
+  check("Obraz + 19 innych: razem 16 części (15 + obraz)", message.parts.filter((p) => p.type.startsWith("tool-")).length === 16 && executedCities.length === 15);
+  check("Obraz + 19 innych: etykiety pogoda i generujObraz", JSON.stringify(message.metadata?.tools) === JSON.stringify(["pogoda", "generujObraz"]));
   const sent = prepareAgentMessages([user("u1", "Proszę wygenerować obraz: kamera CCTV"), message, user("u2", "Dziękuję")]);
   check("Warstwa C: część obrazu zostaje (bez danych obrazu)", sent[1].parts.filter((p) => p.type.startsWith("tool-")).length === 1 && JSON.stringify(sent[1].parts.find((p) => p.type === "tool-generujObraz").output) === '{"ok":true}');
   const r2 = await limitHandler(chatModel([[...textChunks("Proszę."), stop]]))(request({ mode: "chat", messages: sent }));
   check("Kolejna wiadomość po obrazie → 200", r2.status === 200);
 }
 {
-  // Wywołania rozłożone na kroki: 3 + 3 + 3 → po 9 (≥ 8) model nie dostaje już narzędzi.
-  const steps = [0, 1, 2].map((k) => [...[0, 1, 2].map((i) => call(`s${k}${i}`, "czas", {})), toolCallsFinish]);
+  // Wywołania rozłożone na kroki: 5 + 5 + 5 → po 15 (≥ 14) model nie dostaje już narzędzi.
+  const steps = [0, 1, 2].map((k) => [...[0, 1, 2, 3, 4].map((i) => call(`s${k}${i}`, "czas", {})), toolCallsFinish]);
   const model = chatModel([...steps, [...textChunks("Gotowe."), stop]]);
-  const { message } = await readChat(await limitHandler(model)(request({ mode: "chat", messages: [user("u1", "Godzina?")] })));
-  check("Kroki 3+3: trzeci krok jeszcze z narzędziami (6 < 8)", model.doStreamCalls[2].toolChoice?.type !== "none");
-  check("Po 9 wywołaniach czwarty krok bez narzędzi", model.doStreamCalls[3].toolChoice?.type === "none");
-  check("9 części, odpowiedź podpisana", message.parts.filter((p) => p.type === "tool-czas").length === 9 && typeof message.metadata?.sig === "string");
+  const { message, stats } = await readChat(await limitHandler(model)(request({ mode: "chat", messages: [user("u1", "Godzina?")] })));
+  check("Kroki 5+5: trzeci krok jeszcze z narzędziami (10 < 14)", model.doStreamCalls[2].toolChoice?.type !== "none");
+  check("Po 15 wywołaniach czwarty krok bez narzędzi", model.doStreamCalls[3].toolChoice?.type === "none");
+  check("15 części, odpowiedź podpisana", message.parts.filter((p) => p.type === "tool-czas").length === 15 && typeof message.metadata?.sig === "string");
+  check("Liczniki: 4 kroki modelu, 15 wywołań narzędzi (limit kroków 6 liczony osobno)", stats?.kroki === 4 && stats?.narzedzia === 15, JSON.stringify(stats));
 }
 {
   // Odpowiedź z samymi narzędziami (bez tekstu, np. limit kroków) – po warstwie C nadal poprawna.
@@ -765,7 +782,8 @@ check("Instrukcja ReAct tylko w czacie (nie w analizie)", !AMBER_ANALYZE_INSTRUC
 {
   // Błędy narzędzi w podsumowaniu (złe dane, komunikat API) i brak wyników.
   const steps = Array.from({ length: 6 }, (_, i) => [
-    i === 0 ? call("x0", "waluty", { waluta: "EURO" }) : i === 1 ? call("x1", "pogoda", { miasto: "Xyzabc" }) : call(`x${i}`, "kalkulator", { dzialanie: "podziel", liczby: [1, 0] }),
+    // Warsztat 2 (Standard): różne dane – identycznego nieudanego wywołania agent już nie powtarza (test niżej).
+    i === 0 ? call("x0", "waluty", { waluta: "EURO" }) : i === 1 ? call("x1", "pogoda", { miasto: "Xyzabc" }) : call(`x${i}`, "kalkulator", { dzialanie: "podziel", liczby: [i, 0] }),
     toolCallsFinish,
   ]);
   const errF = fakeFetch([["geocoding-api", { results: [] }]]);
@@ -776,7 +794,9 @@ check("Instrukcja ReAct tylko w czacie (nie w analizie)", !AMBER_ANALYZE_INSTRUC
   const text = textOf(message);
   check("Błąd danych wejściowych w podsumowaniu", text.includes("– waluty: nieprawidłowe dane wejściowe – nie wykonano"), text);
   check("Komunikat API w podsumowaniu (brak miasta)", text.includes("– pogoda: Nie znalazłam miasta „Xyzabc”"));
-  check("Komunikat kalkulatora pokazany raz", (text.match(/Nie można dzielić przez zero/g) ?? []).length === 1);
+  check("Komunikaty kalkulatora (4 różne dzielenia przez zero) w podsumowaniu", (text.match(/Nie można dzielić przez zero/g) ?? []).length === 4, text);
+  const dup = { step: 0, name: "kalkulator", input: { dzialanie: "podziel", liczby: [1, 0] }, kind: "ok", output: { ok: false, komunikat: "Nie można dzielić przez zero." } };
+  check("Podsumowanie: ten sam wynik (to samo narzędzie i dane) pokazany raz", (buildStepLimitSummary(6, [dup, { ...dup, step: 1 }, { ...dup, step: 2 }], false).match(/Nie można dzielić przez zero/g) ?? []).length === 1);
   check("Lista kroków z błędem: „1. waluty (błąd)”", formatStepList(buildStepList(message)).startsWith("1. waluty (błąd) → 2. pogoda → 3. kalkulator"), formatStepList(buildStepList(message)));
   check("Brak wyników → komunikat bez zmyślonych danych", buildStepLimitSummary(6, [], false) === "Zatrzymałem się po 6 krokach. Nie udało się jeszcze ustalić wyników – proszę zadać pytanie prościej lub w kilku częściach.");
   check("Pominięte przez limit narzędzi nie trafiają do podsumowania", buildStepLimitSummary(6, [{ step: 0, name: "pogoda", input: {}, kind: "ok", output: { ok: false, pominieto: true, komunikat: TOOL_SKIPPED_MESSAGE } }], false).startsWith("Zatrzymałem się po 6 krokach. Nie udało"));
@@ -967,7 +987,7 @@ console.log("\n=== 14. przestepczosc (Warsztat 1, Fast): data.police.uk + postco
     }
     const t0 = Date.now();
     const slow = await run("SW19 1AA", { pc: neverAnswers }, { timeoutMs: 40 });
-    check("postcodes.io nie odpowiada → przerwanie po limicie czasu", !slow.r.ok && /postcodes\.io nie odpowiada/.test(slow.r.komunikat) && Date.now() - t0 < 1000);
+    check("postcodes.io nie odpowiada → przerwanie po limicie czasu, „Źródło nie odpowiada (postcodes.io).”", !slow.r.ok && slow.r.komunikat === "Źródło nie odpowiada (postcodes.io)." && Date.now() - t0 < 1000, slow.r.komunikat);
   }
   // Błędy crime-last-updated
   for (const [name, last] of [["500", status(500)], ["429", status(429)], ["brak daty", {}], ["zła data", { date: "wczoraj" }], ["miesiąc 13", { date: "2026-13-01" }], ["brak sieci", networkDown]]) {
@@ -1071,8 +1091,8 @@ console.log("\n=== 15. przestepczosc w agencie: rejestracja, etykiety, podpis hi
   // Podsumowanie po limicie kroków – z prawdziwego wyniku narzędzia.
   const summary = buildStepLimitSummary(AGENT_STEP_LIMIT, [{ step: 1, name: "przestepczosc", input: { kodPocztowy: "SW19 1AA" }, kind: "ok", output: out }], false);
   check("Podsumowanie ReAct zawiera wynik przestepczosc", summary.includes("przestepczosc (SW19 1AA, wrzesień 2026): 3 zgłoszeń w promieniu ok. 1 mila (ok. 1,6 km); w obszarze działania firmy"), summary);
-  check("Limity agenta bez zmian: 10 wywołań, 8 (miękki), 6 kroków", AGENT_TOOL_CALL_LIMIT === 10 && AGENT_TOOL_SOFT_LIMIT === 8 && AGENT_STEP_LIMIT === 6);
-  check("Limit części narzędzi w historii bez zmian (10)", MAX_AGENT_TOOL_PARTS === 10);
+  check("Limity agenta: 16 wywołań, 14 (miękki), 6 kroków (Warsztat 2 Standard)", AGENT_TOOL_CALL_LIMIT === 16 && AGENT_TOOL_SOFT_LIMIT === 14 && AGENT_STEP_LIMIT === 6);
+  check("Limit części narzędzi w historii = limit wywołań (16)", MAX_AGENT_TOOL_PARTS === 16);
 
   const route = readFileSync(new URL("../app/api/agent/route.ts", import.meta.url), "utf8");
   check("route.ts: przestepczosc z checkArea (ta sama funkcja co sprawdzObszar)", route.includes("przestepczosc: createCrimeTool({}, { areaCheck: checkArea })") && /import \{ checkArea, informacjeOUrzadzeniu, sprawdzObszar \} from "\.\.\/\.\.\/\.\.\/lib\/amber-tools";/.test(route));
@@ -1087,6 +1107,229 @@ console.log("\n=== 15. przestepczosc w agencie: rejestracja, etykiety, podpis hi
   check("Instrukcja: bez straszenia i nacisku sprzedażowego, bez nazw ulic", I.includes("Nie strasz klienta") && I.includes("nakłaniania do zakupu") && I.includes("Nie podawaj nazw ulic"));
   check("Instrukcja: miesiąc, promień, źródło, przybliżone lokalizacje, opóźnienie", I.includes("miesiąc danych (miesiacOpis)") && I.includes("data.police.uk") && I.includes("lokalizacje w danych są przybliżone") && I.includes("z opóźnieniem"));
   check("Instrukcja testowa (dev) też zawiera zasady; analiza – nie", AMBER_CHAT_INSTRUCTIONS_DEV.includes("STATYSTYKI PRZESTĘPCZOŚCI") && !AMBER_ANALYZE_INSTRUCTIONS.includes("STATYSTYKI PRZESTĘPCZOŚCI"));
+}
+
+console.log("\n=== 16. Warsztat 2 – Standard: 16 wywołań, 60 s zadania, 10 s narzędzia, błędy, liczniki ===");
+{
+  check("Stałe: 60 s zadania, 45 s (bez nowych narzędzi), 10 s narzędzia", AGENT_TASK_TIMEOUT_MS === 60_000 && AGENT_TASK_SOFT_DEADLINE_MS === 45_000 && AGENT_TOOL_TIMEOUT_MS === 10_000);
+  check("Limit 6 kroków modelu bez zmian; 16 wywołań narzędzi liczone osobno", AGENT_STEP_LIMIT === 6 && AGENT_TOOL_CALL_LIMIT === 16);
+  check("Komunikat narzędzia po 10 s: „Źródło nie odpowiada”; generujObraz poza limitem 10 s", SOURCE_TIMEOUT_MESSAGE === "Źródło nie odpowiada" && TOOL_TIMEOUT_EXCLUDED.includes("generujObraz") && TOOL_TIMEOUT_EXCLUDED.length === 1);
+
+  const stdHandler = (model, tools, extra = {}) => createAgentHandler({
+    getSession: () => ({ secret: AUTH.secret, token: TOKEN }),
+    createModels: () => ({ model, tools }),
+    instructions: { chat: AMBER_CHAT_INSTRUCTIONS, analyze: AMBER_ANALYZE_INSTRUCTIONS },
+    history: { deriveHistoryKey, sessionIdFromToken, checkChatHistory, signAgentChatTurn },
+    generateAmberOutput, maxTextChars: MAX_USER_MESSAGE_CHARS, maxRetries: 0, now: () => NOW, log: () => {},
+    ...extra,
+  });
+  const ask = (h, text = "x") => h(request({ mode: "chat", messages: [user("u1", text)] }));
+  const slowTool = (name, ms, out = { ok: true, wynik: "gotowe" }) => {
+    const t = tool({
+      description: `Testowe narzędzie ${name} (opóźnienie ${ms} ms) – tylko do testów automatycznych.`,
+      inputSchema: jsonSchema({ type: "object", properties: {}, additionalProperties: false }),
+      execute: async (_input, { abortSignal } = {}) => {
+        t.calls = (t.calls ?? 0) + 1;
+        return new Promise((resolve) => {
+          const timer = setTimeout(() => resolve(out), ms);
+          abortSignal?.addEventListener("abort", () => { clearTimeout(timer); t.aborted = true; });
+        });
+      },
+    });
+    return t;
+  };
+
+  // 1. Limit 16 wywołań: 10 + 10 w dwóch krokach → 15 innych niż obraz wykonanych, 5 pominiętych; kroki liczone osobno.
+  {
+    const counted = [];
+    const czasCounting = { ...czas, execute: async (input, o) => { counted.push(o.toolCallId); return czas.execute(input, o); } };
+    const model = chatModel([
+      [...Array.from({ length: 10 }, (_, i) => call(`a${i}`, "czas", { strefa: "Europe/London" })), toolCallsFinish],
+      [...Array.from({ length: 10 }, (_, i) => call(`b${i}`, "czas", { strefa: "Europe/Warsaw" })), toolCallsFinish],
+      [...textChunks("Gotowe."), stop],
+    ]);
+    const { message, stats } = await readChat(await ask(stdHandler(model, { czas: czasCounting })));
+    check("16 wywołań: z 20 wykonano 15 (16. miejsce dla obrazu), część 15 w przeglądarce", counted.length === 15 && message.parts.filter((p) => p.type === "tool-czas").length === 15, String(counted.length));
+    check("16 wywołań: drugi krok miał narzędzia (10 < 14), trzeci już nie", model.doStreamCalls[1].toolChoice?.type !== "none" && model.doStreamCalls[2].toolChoice?.type === "none");
+    check("16 wywołań: liczniki 3 kroki modelu, 15 wywołań narzędzi", stats?.kroki === 3 && stats?.narzedzia === 15, JSON.stringify(stats));
+  }
+
+  // 2. Limit 10 s jednego narzędzia → „Źródło nie odpowiada” (skrócony limit testowy 60 ms).
+  {
+    const wolne = slowTool("czas", 5_000);
+    const model = chatModel([[call("t1", "czas", {}), toolCallsFinish], [...textChunks("Nie udało się sprawdzić godziny – źródło nie odpowiada."), stop]]);
+    const t0 = Date.now();
+    const { message, stats } = await readChat(await ask(stdHandler(model, { czas: wolne }, { toolTimeoutMs: 60 })));
+    const out = output(message, "czas");
+    check("Narzędzie ponad limit czasu → wynik { ok: false, komunikat: „Źródło nie odpowiada” }", out?.ok === false && out?.komunikat === "Źródło nie odpowiada", JSON.stringify(out));
+    check("Narzędzie przerwane (sygnał abort) i rozmowa trwa dalej", wolne.aborted === true && Date.now() - t0 < 2000 && typeof message.metadata?.sig === "string");
+    check("Model dostał komunikat „Źródło nie odpowiada”", JSON.stringify(model.doStreamCalls[1].prompt).includes("Źródło nie odpowiada"));
+    check("Liczniki: 2 kroki, 1 wywołanie (przekroczony czas też jest wywołaniem)", stats?.kroki === 2 && stats?.narzedzia === 1);
+    const szybkie = slowTool("czas", 5);
+    const m2 = chatModel([[call("t2", "czas", {}), toolCallsFinish], [...textChunks("OK"), stop]]);
+    const { message: msg2 } = await readChat(await ask(stdHandler(m2, { czas: szybkie }, { toolTimeoutMs: 60 })));
+    check("Narzędzie w limicie → zwykły wynik", output(msg2, "czas")?.wynik === "gotowe");
+  }
+  {
+    // generujObraz poza limitem 10 s (obejmuje go limit 60 s zadania).
+    const obraz = slowTool("generujObraz", 150, { ok: true, model: "test" });
+    const model = chatModel([[call("g1", "generujObraz", {}), toolCallsFinish], [...textChunks("Obraz gotowy."), stop]]);
+    const { message } = await readChat(await ask(stdHandler(model, { generujObraz: obraz }, { toolTimeoutMs: 60 })));
+    check("generujObraz dłużej niż limit narzędzia → NIE przerwany (wynik ok)", output(message, "generujObraz")?.ok === true && !obraz.aborted);
+  }
+  {
+    // Limit czasu zapytania API (getJson) → „Źródło nie odpowiada (nazwa źródła).”
+    const r1 = await getWeather({ miasto: "Londyn" }, { fetch: fakeFetch([["geocoding-api", neverAnswers]]), now, timeoutMs: 30 });
+    const r2 = await getWikipedia({ haslo: "Alarm" }, { fetch: fakeFetch([["wikipedia", neverAnswers]]), now, timeoutMs: 30 });
+    const r3 = await getHolidays({ kraj: "GB", rok: 2026 }, { fetch: fakeFetch([["nager", neverAnswers]]), now, timeoutMs: 30 });
+    check("getJson: przekroczony czas → „Źródło nie odpowiada (Open-Meteo).”", r1.komunikat === SOURCE_TIMEOUT("Open-Meteo") && r1.komunikat === "Źródło nie odpowiada (Open-Meteo).", r1.komunikat);
+    check("getJson: przekroczony czas → Wikipedia i Nager.Date też", r2.komunikat === "Źródło nie odpowiada (Wikipedia)." && r3.komunikat === "Źródło nie odpowiada (Nager.Date).", `${r2.komunikat} | ${r3.komunikat}`);
+    const r4 = await getWeather({ miasto: "Londyn" }, { fetch: fakeFetch([["geocoding-api", status(500)]]), now });
+    check("Inny błąd (500) → dotychczasowy komunikat „Serwis … nie odpowiada”", r4.komunikat === "Serwis pogodowy Open-Meteo nie odpowiada. Spróbuj ponownie za chwilę.");
+  }
+
+  // 3. Błąd narzędzia: identyczne ponowne wywołanie nie jest wykonywane, kolejny krok bez narzędzi.
+  {
+    let runs = 0;
+    const calc = { ...kalkulator, execute: async (input, o) => { runs++; return kalkulator.execute(input, o); } };
+    const model = new MockLanguageModelV4({
+      doStream: async ({ toolChoice }) => {
+        const n = model.doStreamCalls.length;
+        const chunks = n === 1 ? [call("p1", "kalkulator", { dzialanie: "podziel", liczby: [1, 0] }), toolCallsFinish]
+          : n === 2 ? [call("p2", "kalkulator", { dzialanie: "podziel", liczby: [1, 0] }), toolCallsFinish]
+          : [...textChunks(`Nie udało się obliczyć wyniku (dzielenie przez zero). [${toolChoice?.type}]`), stop];
+        return { stream: streamOf([{ type: "response-metadata", id: "r", modelId: "m", timestamp: new Date(0) }, ...chunks]) };
+      },
+    });
+    const { message, stats } = await readChat(await ask(stdHandler(model, { kalkulator: calc })));
+    const parts = message.parts.filter((p) => p.type === "tool-kalkulator");
+    check("Powtórzenie nieudanego wywołania: wykonane tylko raz", runs === 1, String(runs));
+    check("Powtórzenie: model dostał komunikat o niepowtarzaniu", parts[1]?.output?.powtorzenie === true && parts[1]?.output?.komunikat === TOOL_REPEAT_MESSAGE && JSON.stringify(model.doStreamCalls[2].prompt).includes("nie powtarzam go"));
+    check("Powtórzenie: kolejny krok bez narzędzi → odpowiedź z wynikiem częściowym", model.doStreamCalls[2].toolChoice?.type === "none" && textOf(message).includes("Nie udało się obliczyć") && typeof message.metadata?.sig === "string");
+    check("Powtórzenie: liczniki 3 kroki, 1 wykonane wywołanie", stats?.kroki === 3 && stats?.narzedzia === 1, JSON.stringify(stats));
+    check("Powtórzenie nie trafia do podsumowania (pominięte)", buildStepLimitSummary(6, [{ step: 1, name: "kalkulator", input: {}, kind: "ok", output: parts[1]?.output }], false).includes("Nie udało się jeszcze ustalić"));
+  }
+  {
+    // To samo narzędzie z INNYMI danymi po błędzie – dozwolone.
+    let runs = 0;
+    const calc = { ...kalkulator, execute: async (input, o) => { runs++; return kalkulator.execute(input, o); } };
+    const model = chatModel([
+      [call("q1", "kalkulator", { dzialanie: "podziel", liczby: [1, 0] }), toolCallsFinish],
+      [call("q2", "kalkulator", { dzialanie: "podziel", liczby: [1, 4] }), toolCallsFinish],
+      [...textChunks("Wynik: 0,25."), stop],
+    ]);
+    await readChat(await ask(stdHandler(model, { kalkulator: calc })));
+    check("Po błędzie inne dane → wykonane (2 wywołania), narzędzia nadal dostępne", runs === 2 && model.doStreamCalls[2].toolChoice?.type !== "none");
+  }
+  {
+    // Przekroczony czas też blokuje identyczne powtórzenie.
+    const wolne = slowTool("czas", 5_000);
+    const model = chatModel([[call("r1", "czas", {}), toolCallsFinish], [call("r2", "czas", {}), toolCallsFinish], [...textChunks("Źródło nie odpowiada."), stop]]);
+    const { stats } = await readChat(await ask(stdHandler(model, { czas: wolne }, { toolTimeoutMs: 40 })));
+    check("Przekroczony czas → identyczne powtórzenie nie jest wykonywane", wolne.calls === 1 && stats?.narzedzia === 1, JSON.stringify(stats));
+  }
+  {
+    // Wyjątek w narzędziu → błąd narzędzia; identyczne powtórzenie zablokowane.
+    let runs = 0;
+    const boom = tool({ description: "Narzędzie testowe zgłaszające wyjątek – tylko do testów automatycznych.", inputSchema: jsonSchema({ type: "object", properties: {}, additionalProperties: false }), execute: async () => { runs++; throw new Error("awaria"); } });
+    const model = chatModel([[call("e1", "czas", {}), toolCallsFinish], [call("e2", "czas", {}), toolCallsFinish], [...textChunks("Nie udało się sprawdzić."), stop]]);
+    const e = console.error; console.error = () => {};
+    const { message } = await readChat(await ask(stdHandler(model, { czas: boom })));
+    console.error = e;
+    check("Wyjątek narzędzia → część „output-error”, powtórzenie zablokowane", runs === 1 && message.parts.some((p) => p.type === "tool-czas" && p.state === "output-error"));
+  }
+
+  // 4. Limit czasu zadania (skrócony w teście): miękki termin → bez nowych narzędzi; twardy → wynik częściowy.
+  {
+    const delayStep = (ms, chunks) => async () => { await new Promise((r) => setTimeout(r, ms)); return { stream: streamOf([{ type: "response-metadata", id: "r", modelId: "m", timestamp: new Date(0) }, ...chunks]) }; };
+    let n = 0;
+    const steps = [delayStep(120, [call("d1", "czas", {}), toolCallsFinish]), delayStep(0, [...textChunks("Gotowe."), stop])];
+    const model = new MockLanguageModelV4({ doStream: async (o) => steps[n++](o) });
+    const { message } = await readChat(await ask(stdHandler(model, { czas }, { taskSoftDeadlineMs: 100, taskTimeoutMs: 5_000 })));
+    check("Po miękkim terminie kolejny krok bez narzędzi (toolChoice: none)", model.doStreamCalls[0].toolChoice?.type !== "none" && model.doStreamCalls[1].toolChoice?.type === "none" && textOf(message) === "Gotowe.");
+  }
+  {
+    // Twardy limit: drugi krok modelu „wisi” – po limicie serwer przerywa i dopisuje wynik częściowy.
+    let n = 0;
+    const model = new MockLanguageModelV4({
+      doStream: async ({ abortSignal }) => {
+        n++;
+        if (n === 1) return { stream: streamOf([{ type: "response-metadata", id: "r", modelId: "m", timestamp: new Date(0) }, call("h1", "czas", { strefa: "Europe/London" }), toolCallsFinish]) };
+        return {
+          stream: new ReadableStream({
+            start(c) {
+              c.enqueue({ type: "response-metadata", id: "r2", modelId: "m", timestamp: new Date(0) });
+              c.enqueue({ type: "text-start", id: "w" });
+              c.enqueue({ type: "text-delta", id: "w", delta: "Sprawdzam dalej" });
+              abortSignal?.addEventListener("abort", () => c.error(new DOMException("aborted", "AbortError")));
+            },
+          }),
+        };
+      },
+    });
+    const t0 = Date.now();
+    const res = await ask(stdHandler(model, { czas }, { taskTimeoutMs: 300, taskSoftDeadlineMs: 10_000 }), "Która godzina w Londynie?");
+    const { message, stats, raw } = await readChat(res);
+    const text = textOf(message);
+    check("Twardy limit: zadanie przerwane po limicie (≈300 ms), status 200", res.status === 200 && Date.now() - t0 < 3000);
+    check("Twardy limit: tekst przerwanego kroku + „Przerwałam zadanie po … (limit czasu). Udało się ustalić:”",
+      text.startsWith("Sprawdzam dalej\n\n" + taskTimeoutMessage(300) + ". Udało się ustalić:") && taskTimeoutMessage(60_000) === "Przerwałam zadanie po 60 sekundach (limit czasu)", JSON.stringify(text));
+    check("Twardy limit: wynik częściowy z rzeczywistego wyniku narzędzia", /– czas \(Europe\/London\):/.test(text), text);
+    check("Twardy limit: odpowiedź podpisana, bez znacznika błędu", typeof message.metadata?.sig === "string" && !raw.includes('"type":"error"') && !raw.includes('"finishReason":"error"'));
+    check("Twardy limit: liczniki (2 kroki, 1 wywołanie, czas ≥ 300 ms)", stats?.kroki === 2 && stats?.narzedzia === 1 && stats?.czasMs >= 300, JSON.stringify(stats));
+    const next = await stdHandler(chatModel([[...textChunks("Proszę."), stop]]), { czas })(request({ mode: "chat", messages: prepareAgentMessages([user("u1", "Która godzina w Londynie?"), message, user("u2", "Dziękuję")]) }));
+    check("Twardy limit: następna wiadomość z tą odpowiedzią w historii → 200 (podpis HMAC)", next.status === 200);
+  }
+  {
+    // Zamknięcie karty przez klienta (nie limit czasu) → jak dotąd: bez podpisu.
+    const controller = new AbortController();
+    const model = new MockLanguageModelV4({
+      doStream: async ({ abortSignal }) => ({
+        stream: new ReadableStream({
+          start(c) {
+            c.enqueue({ type: "response-metadata", id: "r", modelId: "m", timestamp: new Date(0) });
+            c.enqueue({ type: "text-start", id: "w" });
+            c.enqueue({ type: "text-delta", id: "w", delta: "Pisz" });
+            abortSignal?.addEventListener("abort", () => c.error(new DOMException("aborted", "AbortError")));
+            setTimeout(() => controller.abort(), 50);
+          },
+        }),
+      }),
+    });
+    const req = new Request("http://localhost/api/agent", { method: "POST", headers: { "content-type": "application/json", cookie: COOKIE }, body: JSON.stringify({ mode: "chat", messages: [user("u1", "x")] }), signal: controller.signal });
+    let raw = "";
+    try { raw = await (await stdHandler(model, {}, { taskTimeoutMs: 5_000 })(req)).text(); } catch { raw = ""; }
+    check("Przerwanie przez klienta → bez podpisu i bez liczników (jak dotąd)", !raw.includes('"sig"') && !raw.includes('"stats"'));
+  }
+
+  // 5. Liczniki pod odpowiedzią.
+  {
+    const model = chatModel([[...textChunks("Alarm od £666 + VAT."), stop]]);
+    const res = await ask(stdHandler(model, { czas }));
+    const raw = await res.clone().text();
+    const { message, stats } = await readChat(res);
+    check("Zwykła odpowiedź: liczniki 1 krok, 0 wywołań, czas w ms", stats?.kroki === 1 && stats?.narzedzia === 0 && Number.isInteger(stats?.czasMs) && stats.czasMs >= 0, JSON.stringify(stats));
+    check("Liczniki w metadanych zakończenia (finish)", /"type":"finish".*"stats":\{"kroki":1,"narzedzia":0,"czasMs":\d+\}/.test(raw));
+    check("formatAgentStats: „Kroki modelu: 3 · Wywołania narzędzi: 2 · Czas: 8,4 s”", formatAgentStats({ stats: { kroki: 3, narzedzia: 2, czasMs: 8400 } }) === "Kroki modelu: 3 · Wywołania narzędzi: 2 · Czas: 8,4 s");
+    check("formatAgentStats: 0,3 s i 60,0 s", formatAgentStats({ stats: { kroki: 1, narzedzia: 0, czasMs: 260 } }) === "Kroki modelu: 1 · Wywołania narzędzi: 0 · Czas: 0,3 s" && formatAgentStats({ stats: { kroki: 6, narzedzia: 16, czasMs: 60000 } }) === "Kroki modelu: 6 · Wywołania narzędzi: 16 · Czas: 60,0 s");
+    check("formatAgentStats: brak lub złe dane → nic", formatAgentStats({}) === null && formatAgentStats(undefined) === null && formatAgentStats({ stats: { kroki: "3", narzedzia: 1, czasMs: 1 } }) === null && formatAgentStats({ stats: { kroki: -1, narzedzia: 1, czasMs: 1 } }) === null);
+    const withStats = { ...message, metadata: { ...message.metadata, stats } };
+    const sent = prepareAgentMessages([user("u1", "x"), withStats, user("u2", "y")]);
+    check("Przeglądarka NIE odsyła liczników (podpis zostaje)", !("stats" in sent[1].metadata) && sent[1].metadata.sig === message.metadata.sig);
+    const okNext = await stdHandler(chatModel([[...textChunks("OK"), stop]]), { czas })(request({ mode: "chat", messages: sent }));
+    check("Historia bez liczników → 200", okNext.status === 200);
+    const w = console.warn; console.warn = () => {};
+    const badNext = await stdHandler(chatModel([[...textChunks("OK"), stop]]), { czas })(request({ mode: "chat", messages: [user("u1", "x"), withStats, user("u2", "y")] }));
+    console.warn = w;
+    check("Historia z licznikami (niepodpisane pole) → 400", badNext.status === 400);
+    const chatUi = readFileSync(new URL("../app/chat.tsx", import.meta.url), "utf8");
+    const css = readFileSync(new URL("../app/globals.css", import.meta.url), "utf8");
+    check("Czat: liczniki małym tekstem pod odpowiedzią", chatUi.includes('<small className="agent-stats">{formatAgentStats(message.metadata)}</small>') && /\.agent-stats \{[^}]*font-size: 11px/.test(css));
+  }
+
+  // Instrukcja
+  check("Instrukcja: przy błędzie – co nie zostało sprawdzone, bez ponawiania, wynik częściowy",
+    AMBER_CHAT_INSTRUCTIONS.includes("napisz klientowi wprost, czego nie udało się sprawdzić") && AMBER_CHAT_INSTRUCTIONS.includes("Nie wywołuj ponownie tego samego narzędzia z tymi samymi danymi po błędzie") && AMBER_CHAT_INSTRUCTIONS.includes("(wynik częściowy)") && AMBER_CHAT_INSTRUCTIONS.includes("„Źródło nie odpowiada”"));
 }
 
 console.log(`\nWynik: ${passed} zaliczonych, ${failed} niezaliczonych.`);
