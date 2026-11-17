@@ -1,4 +1,5 @@
 // Lekcja 4, Warsztat 3 (poziom Minimum): Dashboard podróży – jedno miasto, 5 kart i krótkie podsumowanie agenta.
+// Poziom Fast: tryb „Porównaj” (pole „miasto2”) – dwa miasta, wspólna data, rekomendacja jednego miasta.
 // Ten plik działa tylko na serwerze. Dane pobierają ISTNIEJĄCE funkcje narzędzi agenta (lib/amber-tools-api.ts,
 // lib/amber-tools-local.ts) – są przekazywane z zewnątrz (app/api/dashboard/route.ts), tak jak w createAgentHandler,
 // żeby logikę dało się przetestować bez internetu i bez modelu (scripts/test-amber-dashboard.mjs).
@@ -27,6 +28,20 @@ export type DashboardResult = {
   data: string;
   karty: DashboardCard[];
   podsumowanie: string | null; // null = „Podsumowanie niedostępne”
+};
+
+// Poziom Fast: tryb „Porównaj” – dwa miasta, wspólna data, po 5 kart na miasto i rekomendacja jednego miasta.
+export type CompareCity = { miasto: string; kraj: string; karty: DashboardCard[] };
+export type CompareRecommendation = { miasto: string; uzasadnienie: string };
+export type CompareResult = {
+  tryb: "porownanie";
+  data: string;
+  miasta: [CompareCity, CompareCity];
+  rekomendacja: CompareRecommendation | null; // null = „Rekomendacja niedostępna”
+};
+export type RecommendInput = {
+  data: string;
+  miasta: { miasto: string; kraj: string; karty: unknown[]; brakujaceZrodla: string[] }[];
 };
 
 // Kształty wyników istniejących funkcji (tylko pola używane przez Dashboard).
@@ -63,6 +78,8 @@ export type DashboardDeps = {
   summarize:
     | ((input: { miasto: string; kraj: string; data: string; karty: unknown[]; brakujaceZrodla: string[] }) => Promise<string>)
     | null;
+  // Fast: rekomendacja jednego z dwóch miast (tylko dane kart). null = brak konfiguracji modelu.
+  recommend?: ((input: RecommendInput) => Promise<string>) | null;
   now?: () => Date;
   log?: (message: string) => void;
 };
@@ -73,7 +90,10 @@ export const DASHBOARD_MESSAGES = {
   noCity: "Wpisz miasto (od 1 do 100 znaków).",
   badDate: "Podaj datę w formacie RRRR-MM-DD.",
   summaryUnavailable: "Podsumowanie niedostępne",
+  noCity2: "Wpisz drugie miasto (od 1 do 100 znaków).",
+  recommendationUnavailable: "Rekomendacja niedostępna",
 } as const;
+export const sameCityMessage = (name: string) => `Oba pola wskazują to samo miasto (${name}). Wybierz dwa różne miasta.`;
 export const MAX_SUMMARY_CHARS = 600;
 // Podsumowanie agenta: 2–3 zdania (wymaganie lekcji). Inna liczba → „Podsumowanie niedostępne”.
 export const MIN_SUMMARY_SENTENCES = 2;
@@ -307,6 +327,114 @@ export function cardsForModel(karty: DashboardCard[]): unknown[] {
   );
 }
 
+// Geokodowanie jednego miasta – dokładnie raz. Trzy wyniki:
+//   „not_found”   – źródło odpowiedziało, ale miasta nie ma (→ 400 z nazwą miasta),
+//   „unavailable” – serwis geokodowania nie odpowiada (→ karty „Brak danych” jak w Standard, bez 400),
+//   „ok”          – mamy miejsce (nazwa, kraj, strefa czasowa, współrzędne).
+type GeoStep =
+  | { kind: "ok"; place: Place }
+  | { kind: "not_found"; komunikat: string }
+  | { kind: "unavailable"; komunikat: string };
+
+async function geocodeStep(miasto: string, sources: DashboardSources, at: Date): Promise<GeoStep> {
+  let geo: Awaited<ReturnType<DashboardSources["geocodeCity"]>>;
+  try {
+    geo = await sources.geocodeCity(miasto);
+  } catch {
+    geo = { ok: false, komunikat: "Serwis pogodowy Open-Meteo nie odpowiada. Spróbuj ponownie za chwilę.", pobrano: fetchedLabel(at) };
+  }
+  if (geo.ok) return { kind: "ok", place: geo.place };
+  if (geo.komunikat.startsWith("Nie znalazłam miasta")) return { kind: "not_found", komunikat: geo.komunikat };
+  return { kind: "unavailable", komunikat: geo.komunikat };
+}
+
+function cardsForStep(miasto: string, step: GeoStep, data: string, sources: DashboardSources, at: Date): Promise<DashboardCard[]> {
+  return step.kind === "ok"
+    ? buildCityCards(step.place, data, sources, at)
+    : buildCardsWithoutPlace(miasto, step.komunikat, sources, at);
+}
+
+const lowerPl = (s: string) => s.trim().toLocaleLowerCase("pl-PL");
+
+// Fast: to samo miasto – porównanie PO geokodowaniu (np. „Londyn” i „London” → to samo miejsce).
+// Ten sam kraj i ta sama nazwa (bez względu na wielkość liter) albo prawie te same współrzędne.
+export function samePlace(a: Place, b: Place): boolean {
+  if (a.countryCode !== b.countryCode) return false;
+  if (lowerPl(a.name) === lowerPl(b.name)) return true;
+  return Math.abs(a.latitude - b.latitude) < 0.05 && Math.abs(a.longitude - b.longitude) < 0.05;
+}
+
+// Fast: odpowiedź modelu → rekomendacja. Pierwsza linia „MIASTO: <nazwa>”, dalej uzasadnienie.
+// Nazwa musi być jedną z nazw z geokodowania (bez względu na wielkość liter); zwracamy nazwę z geokodowania.
+// Uzasadnienie: 2–3 zdania, ≤ 600 znaków, wymienia każde brakujące źródło. Inaczej null → „Rekomendacja niedostępna”.
+export function parseRecommendation(text: string, nazwy: string[], karty: DashboardCard[]): CompareRecommendation | null {
+  const lines = text.trim().split(/\r?\n/);
+  const match = /^\s*MIASTO\s*:\s*(.+?)\s*\.?\s*$/i.exec(lines[0] ?? "");
+  if (!match) return null;
+  const wybrane = nazwy.find((n) => lowerPl(n) === lowerPl(match[1]));
+  if (!wybrane) return null;
+  const uzasadnienie = lines.slice(1).join(" ").replace(/\s+/g, " ").trim();
+  const sentences = countSentences(uzasadnienie);
+  if (
+    uzasadnienie.length === 0 ||
+    uzasadnienie.length > MAX_SUMMARY_CHARS ||
+    sentences < MIN_SUMMARY_SENTENCES ||
+    sentences > MAX_SUMMARY_SENTENCES ||
+    !summaryNamesMissing(uzasadnienie, karty)
+  ) {
+    return null;
+  }
+  return { miasto: wybrane, uzasadnienie };
+}
+
+async function handleCompare(
+  deps: DashboardDeps,
+  miasta: [string, string],
+  data: string,
+  at: Date,
+  log: (m: string) => void,
+): Promise<Response> {
+  // 1. Geokodowanie obu miast – każde dokładnie raz, równolegle.
+  const steps = await Promise.all(miasta.map((m) => geocodeStep(m, deps.sources, at)));
+
+  // 2. Miasto nie znalezione → 400 z nazwą miasta (komunikat narzędzia). Serwis niedostępny → dalej, karty „Brak danych”.
+  const notFound = steps.flatMap((s) => (s.kind === "not_found" ? [s.komunikat] : []));
+  if (notFound.length > 0) return json({ error: notFound.join(" ") }, 400);
+
+  // 3. To samo miasto dwa razy – sprawdzane po geokodowaniu.
+  const [s1, s2] = steps;
+  if (s1.kind === "ok" && s2.kind === "ok" && samePlace(s1.place, s2.place)) {
+    return json({ error: sameCityMessage(s1.place.name) }, 400);
+  }
+
+  // 4. Po 5 kart na miasto, oba miasta równolegle; każda karta niezależnie.
+  const kartyObu = await Promise.all(steps.map((s, i) => cardsForStep(miasta[i], s, data, deps.sources, at)));
+  const cities = steps.map((s, i) => ({
+    miasto: s.kind === "ok" ? s.place.name : miasta[i],
+    kraj: s.kind === "ok" ? s.place.country : "",
+    karty: kartyObu[i],
+  })) as [CompareCity, CompareCity];
+
+  // 5. Rekomendacja agenta – tylko na podstawie kart. Przy problemie: „Rekomendacja niedostępna”, karty zostają.
+  let rekomendacja: CompareRecommendation | null = null;
+  if (deps.recommend) {
+    try {
+      const text = await deps.recommend({
+        data,
+        miasta: cities.map((c) => ({ miasto: c.miasto, kraj: c.kraj, karty: cardsForModel(c.karty), brakujaceZrodla: missingSources(c.karty) })),
+      });
+      rekomendacja = parseRecommendation(text, cities.map((c) => c.miasto), [...cities[0].karty, ...cities[1].karty]);
+      if (!rekomendacja) log(`[Amber] /api/dashboard – rekomendacja odrzucona (długość ${text.trim().length}).`);
+    } catch (error) {
+      const details = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+      console.error(`[Amber] /api/dashboard – błąd rekomendacji: ${details.slice(0, 300)}`);
+    }
+  }
+
+  const result: CompareResult = { tryb: "porownanie", data, miasta: cities, rekomendacja };
+  return json(result);
+}
+
 export function createDashboardHandler(deps: DashboardDeps) {
   const now = deps.now ?? (() => new Date());
   const log = deps.log ?? ((m: string) => console.log(m));
@@ -322,30 +450,29 @@ export function createDashboardHandler(deps: DashboardDeps) {
     } catch {
       return json({ error: DASHBOARD_MESSAGES.badRequest }, 400);
     }
-    if (!isObject(body) || !Object.keys(body).every((k) => k === "miasto" || k === "data")) {
+    if (!isObject(body) || !Object.keys(body).every((k) => k === "miasto" || k === "miasto2" || k === "data")) {
       return json({ error: DASHBOARD_MESSAGES.badRequest }, 400);
     }
     const miasto = typeof body.miasto === "string" ? body.miasto.trim() : "";
     if (!miasto || miasto.length > 100) return json({ error: DASHBOARD_MESSAGES.noCity }, 400);
+    // Fast: pole „miasto2” włącza tryb „Porównaj” (bez niego – jedno miasto, jak dotąd).
+    const compare = "miasto2" in body;
+    const miasto2 = typeof body.miasto2 === "string" ? body.miasto2.trim() : "";
+    if (compare && (!miasto2 || miasto2.length > 100)) return json({ error: DASHBOARD_MESSAGES.noCity2 }, 400);
     const data = typeof body.data === "string" ? body.data : "";
     if (!isRealDate(data)) return json({ error: DASHBOARD_MESSAGES.badDate }, 400);
 
+    const at = now();
+    if (compare) return handleCompare(deps, [miasto, miasto2], data, at, log);
+
     // 3. Geokodowanie miasta – dokładnie raz (wynik używają karty Pogoda, Waluty, Święta, Wikipedia i Czas).
     //    Nieznane miasto → 400 (jak w Minimum). Geokodowanie niedostępne → karty bez danych (oprócz Wikipedii), status 200.
-    const at = now();
-    let geo: Awaited<ReturnType<DashboardSources["geocodeCity"]>>;
-    try {
-      geo = await deps.sources.geocodeCity(miasto);
-    } catch {
-      geo = { ok: false, komunikat: "Serwis pogodowy Open-Meteo nie odpowiada. Spróbuj ponownie za chwilę.", pobrano: fetchedLabel(at) };
-    }
-    if (!geo.ok && geo.komunikat.startsWith("Nie znalazłam miasta")) return json({ error: geo.komunikat }, 400);
+    const step = await geocodeStep(miasto, deps.sources, at);
+    if (step.kind === "not_found") return json({ error: step.komunikat }, 400);
 
     // 4. Pięć kart (istniejące funkcje narzędzi), każda niezależnie.
-    const place = geo.ok ? geo.place : null;
-    const karty = place
-      ? await buildCityCards(place, data, deps.sources, at)
-      : await buildCardsWithoutPlace(miasto, geo.ok ? "" : geo.komunikat, deps.sources, at);
+    const place = step.kind === "ok" ? step.place : null;
+    const karty = await cardsForStep(miasto, step, data, deps.sources, at);
     const brakujaceZrodla = missingSources(karty);
 
     // 5. Podsumowanie agenta – tylko na podstawie kart. Przy problemie: „Podsumowanie niedostępne”, karty zostają.

@@ -98,3 +98,15 @@ h1 { margin: 0; }
 .card-loading { color: #888; }
 .card-missing { font-weight: 600; color: #8a1f1f; }
 .card-reason { color: #8a5a5a; font-size: 12px; }
+/* Lekcja 4, Warsztat 3 (Fast): tryb „Porównaj” */
+.mode-switch { display: inline-flex; align-self: flex-start; gap: 0; margin-bottom: 10px; border: 1px solid #ccc; border-radius: 6px; overflow: hidden; }
+.mode-switch button { padding: 8px 14px; border: 0; background: #fff; color: #222; font-size: 14px; cursor: pointer; }
+.mode-switch button.active { background: #222; color: #fff; }
+.mode-switch button:disabled { cursor: not-allowed; }
+.compare-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 10px; }
+.compare-column { border: 2px solid transparent; border-radius: 10px; padding: 6px; }
+.compare-column.recommended { border-color: #1e6b2f; }
+.compare-column .cards { grid-template-columns: 1fr; }
+.compare-city { margin: 0; font-size: 16px; }
+.recommendation-city { font-weight: 600; }
+@media (max-width: 700px) { .compare-columns { grid-template-columns: 1fr; } }

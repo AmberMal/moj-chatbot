@@ -1,4 +1,4 @@
-// Testy lekcji 4, Warsztat 3 (Minimum): Dashboard podróży – BEZ internetu (sztuczny fetch) i BEZ modelu.
+// Testy lekcji 4, Warsztat 3 (Minimum, Standard, Fast): Dashboard podróży – BEZ internetu (sztuczny fetch) i BEZ modelu.
 // Dashboard korzysta z TYCH SAMYCH funkcji co narzędzia agenta (geocodeCity, getWeather, getCurrency, getHolidays, getWikipedia, timeIn).
 // Uruchomienie (w folderze projektu):
 //   node --experimental-strip-types scripts/test-amber-dashboard.mjs
@@ -14,10 +14,13 @@ import {
   summaryNamesMissing,
   differenceFromPoland,
   firstSentences,
+  parseRecommendation,
+  samePlace,
+  sameCityMessage,
 } from "../lib/amber-dashboard.ts";
 import { geocodeCity, getCurrency, getHolidays, getWeather, getWikipedia } from "../lib/amber-tools-api.ts";
 import { timeIn } from "../lib/amber-tools-local.ts";
-import { AMBER_CHAT_INSTRUCTIONS, AMBER_DASHBOARD_INSTRUCTIONS } from "../lib/amber-instructions.ts";
+import { AMBER_CHAT_INSTRUCTIONS, AMBER_COMPARE_INSTRUCTIONS, AMBER_DASHBOARD_INSTRUCTIONS } from "../lib/amber-instructions.ts";
 const neverAnswers = (_url, init) => new Promise((_, reject) => init.signal.addEventListener("abort", () => reject(new Error("aborted"))));
 const networkDown = () => Promise.reject(new TypeError("fetch failed"));
 
@@ -295,8 +298,8 @@ console.log("\n=== 13. Pliki: strona, endpoint, linki ===");
   check("Link powrotny do czatu", page.includes('href="/"') && page.includes("Wróć do czatu"));
   check("Link do Dashboardu w nagłówku czatu", chat.includes('href="/dashboard"') && chat.includes("Dashboard podróży"));
   check("Formularz: „Dokąd jedziesz?”, „Kiedy?”, „Sprawdź”, „Odśwież”", ["Dokąd jedziesz?", "Kiedy?", '"Sprawdź"', '"Odśwież"'].every((t) => ui.includes(t)));
-  check("„Podsumowanie niedostępne” przy braku podsumowania", ui.includes('result.podsumowanie ?? "Podsumowanie niedostępne"'));
-  check("Minimum: bez trybu porównania", !/porown|Porównaj/i.test(ui + route));
+  check("„Podsumowanie niedostępne” przy braku podsumowania", ui.includes('.podsumowanie ?? "Podsumowanie niedostępne"'));
+  check("Fast: tryb porównania przez ten sam endpoint (pole miasto2), bez narzędzi", route.includes("AMBER_COMPARE_INSTRUCTIONS") && ui.includes("miasto2") && ui.includes('"Porównaj"'));
 }
 
 console.log("\n=== 14. STANDARD: stany kart i awaria jednego źródła ===");
@@ -397,8 +400,191 @@ for (const [id, name, host] of SOURCE_OUTAGES) {
   const ui = readFileSync(new URL("../app/dashboard/dashboard.tsx", import.meta.url), "utf8");
   check("UI: etykiety stanów OK / Ładuję… / Brak danych", ui.includes(">OK<") && ui.includes("Ładuję…") && ui.includes(">Brak danych<"));
   check("UI: „Brak danych — spróbuj odświeżyć” i przyczyna mniejszym drukiem", ui.includes('"Brak danych — spróbuj odświeżyć"') && ui.includes('className="card-reason"'));
-  check("UI: przy błędzie zapytania poprzednie karty nie zostają (setResult(null))", (ui.match(/setResult\(null\)/g) ?? []).length === 2);
-  check("Nadal bez trybu porównania (Fast)", !/porown|Porównaj/i.test(ui));
+  check("UI: przy błędzie zapytania poprzednie karty nie zostają (setResult(null))", (ui.match(/setResult\(null\)/g) ?? []).length >= 2);
+  check("UI Fast: przełącznik „Jedno miasto / Porównaj”, karty obok siebie, „Rekomendacja niedostępna”", ui.includes("Jedno miasto") && ui.includes('className="compare-columns"') && ui.includes("Rekomendacja niedostępna") && ui.includes("Wspólna data"));
+}
+
+// ---------------------------------------------------------------------------
+console.log("\n=== 15. Fast: tryb „Porównaj” (dwa miasta, wspólna data, rekomendacja) ===");
+{
+  const FR_HOL_2026 = [{ date: "2026-12-25", localName: "Noël", name: "Christmas Day", global: true, counties: null }];
+  // Geokodowanie zależne od wpisanej nazwy (parametr name). „London” → „Londyn” (jak Open-Meteo z językiem pl).
+  const GEO_BY_NAME = {
+    londyn: GEO("Londyn", "Wielka Brytania", "GB", "Europe/London"),
+    london: GEO("Londyn", "Wielka Brytania", "GB", "Europe/London"),
+    "paryż": GEO("Paryż", "Francja", "FR", "Europe/Paris", 48.85, 2.35),
+    paris: GEO("Paryż", "Francja", "FR", "Europe/Paris", 48.85, 2.35),
+    xyzabc: { results: [] },
+    qwerty: { results: [] },
+  };
+  const geoName = (url) => (new URL(url).searchParams.get("name") ?? "").toLocaleLowerCase("pl-PL");
+  function twoCityFetch(geoOverride) {
+    return fakeFetch([
+      ["geocoding-api", (url, init) => (geoOverride ? geoOverride(geoName(url), url, init) : null) ?? GEO_BY_NAME[geoName(url)] ?? { results: [] }],
+      ["api.open-meteo.com/v1/forecast", FORECAST],
+      ["/rates/A/GBP/", GBP],
+      ["/rates/A/EUR/", EUR],
+      ["PublicHolidays/2026/GB", GB_HOL_2026],
+      ["PublicHolidays/2027/GB", GB_HOL_2027],
+      ["PublicHolidays/2026/FR", FR_HOL_2026],
+      ["PublicHolidays/2027/FR", []],
+      ["pl.wikipedia.org", (url) => WIKI(decodeURIComponent(url.split("/summary/")[1]).replace(/_/g, " "))],
+    ]);
+  }
+  const GOOD = "MIASTO: Paryż\nW Paryżu prognoza jest podobna, a święta wypadają później. Warto, aby Państwo sprawdzili kurs euro przed wyjazdem.";
+  function compareHandler({ f = twoCityFetch(), session = true, recommend = async () => GOOD } = {}) {
+    const c = { recommends: 0, summaries: 0, inputs: [] };
+    const h = createDashboardHandler({
+      hasSession: () => session,
+      sources: sourcesWith(f),
+      summarize: async () => { c.summaries++; return "x"; },
+      recommend: recommend ? async (input) => { c.recommends++; c.inputs.push(input); return recommend(input); } : null,
+      now,
+      log: () => {},
+    });
+    return { handle: h, f, c };
+  }
+  const geoCalls = (f) => f.calls.filter((x) => x.url.includes("geocoding-api")).length;
+
+  // Sesja pierwsza
+  {
+    const { handle, f, c } = compareHandler({ session: false });
+    const r = await handle(request({ miasto: "Londyn", miasto2: "Paryż", data: "2026-11-17" }));
+    check("Porównanie bez sesji → 401, bez źródeł i bez modelu", r.status === 401 && f.calls.length === 0 && c.recommends === 0);
+  }
+
+  // Walidacja drugiego miasta
+  for (const [name, m2] of [["puste", ""], ["same spacje", "   "], ["nie tekst", 5], ["null", null], ["za długie", "a".repeat(101)]]) {
+    const { handle, f } = compareHandler();
+    const r = await handle(request({ miasto: "Londyn", miasto2: m2, data: "2026-11-17" }));
+    const b = await r.json();
+    check(`miasto2 ${name} → 400 „Wpisz drugie miasto…”`, r.status === 400 && b.error === DASHBOARD_MESSAGES.noCity2 && f.calls.length === 0, `${r.status} ${b.error}`);
+  }
+  {
+    const { handle, f } = compareHandler();
+    const r = await handle(request({ miasto: "Londyn", miasto2: "Paryż", data: "17.11.2026" }));
+    check("Porównanie: zła data → 400, bez zapytań", r.status === 400 && f.calls.length === 0);
+    const r2 = await handle(request({ miasto: "Londyn", miasto2: "Paryż", data: "2026-11-17", miasto3: "Rzym" }));
+    check("Porównanie: nieznane pole → 400", r2.status === 400);
+  }
+
+  // Poprawne porównanie
+  {
+    const { handle, f, c } = compareHandler({ recommend: async () => "miasto: paryż\nW Paryżu prognoza jest podobna, a święta wypadają później. Warto, aby Państwo sprawdzili kurs euro przed wyjazdem." });
+    const r = await handle(request({ miasto: " Londyn ", miasto2: "Paryż", data: "2026-11-17" }));
+    const b = await r.json();
+    check("Status 200, tryb „porownanie”, wspólna data", r.status === 200 && b.tryb === "porownanie" && b.data === "2026-11-17");
+    check("Dwa miasta w kolejności formularza, nazwy i kraje z geokodowania", b.miasta.length === 2 && b.miasta[0].miasto === "Londyn" && b.miasta[0].kraj === "Wielka Brytania" && b.miasta[1].miasto === "Paryż" && b.miasta[1].kraj === "Francja");
+    check("Po 5 kart na miasto, w stałej kolejności", b.miasta.every((m) => JSON.stringify(m.karty.map((k) => k.id)) === '["pogoda","waluty","swieta","wikipedia","czas"]'));
+    check("Wszystkie karty OK", b.miasta.every((m) => m.karty.every((k) => k.stan === "ok")));
+    check("Waluty: GBP dla Londynu, EUR dla Paryża", b.miasta[0].karty[1].wartosc === "1 GBP = 5,1234" && b.miasta[1].karty[1].wartosc === "1 EUR = 4,4018");
+    check("Czas: różnica względem Polski −1 h i 0 h", b.miasta[0].karty[4].szczegoly.endsWith("−1 h") && b.miasta[1].karty[4].szczegoly.endsWith("0 h"));
+    check("Geokodowanie dokładnie raz na miasto (2 razy)", geoCalls(f) === 2, String(geoCalls(f)));
+    check("Rekomendacja: „miasto: paryż” (małe litery) → nazwa z geokodowania „Paryż”", b.rekomendacja?.miasto === "Paryż" && b.rekomendacja.uzasadnienie.startsWith("W Paryżu"), JSON.stringify(b.rekomendacja));
+    check("Model: jedno wywołanie rekomendacji, bez podsumowania jednego miasta", c.recommends === 1 && c.summaries === 0);
+    check("Model dostał tylko dane kart obu miast (bez linków)", c.inputs[0].miasta.length === 2 && c.inputs[0].miasta.every((m) => m.karty.length === 5) && !JSON.stringify(c.inputs[0]).includes("http") && c.inputs[0].data === "2026-11-17");
+    check("Bez pola „podsumowanie” w trybie porównania", !("podsumowanie" in b));
+  }
+
+  // Rekomendacja – walidacja odpowiedzi modelu
+  const recOf = async (text) => {
+    const { handle } = compareHandler({ recommend: async () => text });
+    return (await (await handle(request({ miasto: "Londyn", miasto2: "Paryż", data: "2026-11-17" }))).json()).rekomendacja;
+  };
+  check("Rekomendacja „LONDYN” (wielkie litery) → „Londyn”", (await recOf("MIASTO: LONDYN\nW Londynie jest chłodniej. Święta wypadają wcześniej.")).miasto === "Londyn");
+  check("Rekomendacja z kropką po nazwie → przyjęta", (await recOf("MIASTO: Paryż.\nW Paryżu jest podobnie. Kurs euro jest znany.")).miasto === "Paryż");
+  check("Miasto spoza porównania (Rzym) → „Rekomendacja niedostępna”", (await recOf("MIASTO: Rzym\nRzym jest piękny. Polecam.")) === null);
+  check("Wpisana nazwa zamiast nazwy z geokodowania (Paris) → odrzucona", (await recOf("MIASTO: Paris\nW Paryżu jest podobnie. Kurs euro jest znany.")) === null);
+  check("Brak linii „MIASTO:” → odrzucona", (await recOf("Polecam Paryż. W Paryżu jest podobnie.")) === null);
+  check("Za mało zdań (1) → odrzucona", (await recOf("MIASTO: Paryż\nW Paryżu jest podobnie.")) === null);
+  check("Za dużo zdań (4) → odrzucona", (await recOf("MIASTO: Paryż\nJeden. Dwa. Trzy. Cztery.")) === null);
+  check(`Uzasadnienie > ${MAX_SUMMARY_CHARS} znaków → odrzucone`, (await recOf(`MIASTO: Paryż\n${"a".repeat(400)}. ${"b".repeat(300)}.`)) === null);
+  check("Pusta odpowiedź → odrzucona", (await recOf("")) === null);
+  {
+    const { handle } = compareHandler({ recommend: null });
+    const b = await (await handle(request({ miasto: "Londyn", miasto2: "Paryż", data: "2026-11-17" }))).json();
+    check("Brak konfiguracji modelu → rekomendacja null, karty są", b.rekomendacja === null && b.miasta.every((m) => m.karty.length === 5));
+  }
+  {
+    const { handle } = compareHandler({ recommend: async () => { throw new Error("model padł"); } });
+    const r = await silent(() => handle(request({ miasto: "Londyn", miasto2: "Paryż", data: "2026-11-17" })));
+    const b = await r.json();
+    check("Błąd modelu → 200, rekomendacja null, karty zostają", r.status === 200 && b.rekomendacja === null && b.miasta.length === 2);
+  }
+
+  // Poprawka 1: „miasto nie znalezione” (400 z nazwą) ≠ „serwis geokodowania nie odpowiada” (karty „Brak danych”, bez 400)
+  {
+    const { handle, f, c } = compareHandler();
+    const r = await handle(request({ miasto: "Londyn", miasto2: "Xyzabc", data: "2026-11-17" }));
+    const b = await r.json();
+    check("Drugie miasto nie znalezione → 400 z nazwą „Xyzabc”", r.status === 400 && b.error.startsWith("Nie znalazłam miasta „Xyzabc”"), b.error);
+    check("Nie znalezione → bez kart i bez modelu", !f.calls.some((x) => x.url.includes("forecast") || x.url.includes("wikipedia")) && c.recommends === 0);
+    const r2 = await compareHandler().handle(request({ miasto: "Xyzabc", miasto2: "Paryż", data: "2026-11-17" }));
+    const b2 = await r2.json();
+    check("Pierwsze miasto nie znalezione → 400 z nazwą „Xyzabc”", r2.status === 400 && b2.error.includes("„Xyzabc”") && !b2.error.includes("Paryż"), b2.error);
+    const r3 = await compareHandler().handle(request({ miasto: "Xyzabc", miasto2: "Qwerty", data: "2026-11-17" }));
+    const b3 = await r3.json();
+    check("Oba nie znalezione → 400 z obiema nazwami", r3.status === 400 && b3.error.includes("„Xyzabc”") && b3.error.includes("„Qwerty”"), b3.error);
+  }
+  for (const [name, geoOverride] of [
+    ["odpowiada błędem 503", (n) => (n === "paryż" ? status(503) : null)],
+    ["nie ma sieci", (n) => (n === "paryż" ? networkDown() : null)],
+  ]) {
+    const { handle, c } = compareHandler({
+      f: twoCityFetch(geoOverride),
+      recommend: async () => "MIASTO: Londyn\nDla Paryża brak danych o pogodzie, walucie, świętach i czasie, bo serwis Open-Meteo nie odpowiada. Londyn ma komplet danych z kart.",
+    });
+    const r = await silent(() => handle(request({ miasto: "Londyn", miasto2: "Paryż", data: "2026-11-17" })));
+    const b = await r.json();
+    const paris = b.miasta?.[1];
+    check(`Geokodowanie Paryża ${name} → 200 (bez 400)`, r.status === 200 && b.tryb === "porownanie", `${r.status} ${b.error ?? ""}`);
+    check(`  Paryż: 4 karty „Brak danych”, Wikipedia OK (jak w Standard)`, paris && paris.miasto === "Paryż" && paris.kraj === "" && paris.karty.filter((k) => k.stan === "brak_danych").map((k) => k.id).join() === "pogoda,waluty,swieta,czas" && paris.karty[3].stan === "ok", JSON.stringify(paris?.karty.map((k) => k.stan)));
+    check(`  Paryż: przyczyna = komunikat o niedostępnym serwisie`, paris && paris.karty[0].komunikat.includes("nie odpowiada"), paris?.karty[0].komunikat);
+    check(`  Londyn: 5 kart OK`, b.miasta[0].karty.every((k) => k.stan === "ok"));
+    check(`  Model dostał brakujące źródła Paryża`, c.inputs[0].miasta[1].brakujaceZrodla.length === 4 && c.inputs[0].miasta[0].brakujaceZrodla.length === 0);
+    check(`  Rekomendacja wymienia brakujące źródła → pokazana`, b.rekomendacja?.miasto === "Londyn");
+  }
+  {
+    const { handle } = compareHandler({ f: twoCityFetch((n) => (n === "paryż" ? status(503) : null)) });
+    const b = await (await silent(() => handle(request({ miasto: "Londyn", miasto2: "Paryż", data: "2026-11-17" })))).json();
+    check("Rekomendacja pomija brakujące źródła → „Rekomendacja niedostępna”, karty zostają", b.rekomendacja === null && b.miasta.length === 2);
+  }
+
+  // Poprawka 2: to samo miasto sprawdzane po geokodowaniu
+  for (const [a, bName] of [["Londyn", "London"], ["londyn", "LONDYN"], ["Paris", "Paryż"]]) {
+    const { handle, f, c } = compareHandler();
+    const r = await handle(request({ miasto: a, miasto2: bName, data: "2026-11-17" }));
+    const b = await r.json();
+    const expected = a.toLowerCase().startsWith("lond") ? "Londyn" : "Paryż";
+    check(`„${a}” i „${bName}” → 400 „to samo miasto (${expected})”`, r.status === 400 && b.error === sameCityMessage(expected), b.error);
+    check(`  bez kart i bez modelu, geokodowanie 2 razy`, geoCalls(f) === 2 && !f.calls.some((x) => x.url.includes("forecast")) && c.recommends === 0);
+  }
+  {
+    const P = (name, cc, lat, lon) => ({ name, latitude: lat, longitude: lon, country: "", countryCode: cc, timezone: "UTC" });
+    check("samePlace: Paryż (FR) i Paris (US) to różne miasta", !samePlace(P("Paryż", "FR", 48.85, 2.35), P("Paris", "US", 33.66, -95.55)));
+    check("samePlace: ta sama nazwa i kraj (różna wielkość liter)", samePlace(P("Londyn", "GB", 51.5, -0.12), P("LONDYN", "GB", 51.51, -0.13)));
+    check("samePlace: inna nazwa, te same współrzędne → to samo", samePlace(P("Londyn", "GB", 51.5, -0.12), P("London", "GB", 51.5, -0.12)));
+    check("samePlace: inne miasta w tym samym kraju", !samePlace(P("Londyn", "GB", 51.5, -0.12), P("Manchester", "GB", 53.48, -2.24)));
+  }
+
+  // Poprawka 3: nazwa z rekomendacji porównywana z nazwami z geokodowania (bez względu na wielkość liter)
+  {
+    const karty = [{ id: "pogoda", stan: "ok" }];
+    const txt = (n) => `MIASTO: ${n}\nZdanie pierwsze. Zdanie drugie.`;
+    check("parseRecommendation: „paryż” → „Paryż”", parseRecommendation(txt("paryż"), ["Londyn", "Paryż"], karty)?.miasto === "Paryż");
+    check("parseRecommendation: „PARYŻ” → „Paryż”", parseRecommendation(txt("PARYŻ"), ["Londyn", "Paryż"], karty)?.miasto === "Paryż");
+    check("parseRecommendation: „Paris” (nie z geokodowania) → null", parseRecommendation(txt("Paris"), ["Londyn", "Paryż"], karty) === null);
+    check("parseRecommendation: „Londyn i Paryż” → null", parseRecommendation(txt("Londyn i Paryż"), ["Londyn", "Paryż"], karty) === null);
+  }
+
+  // Tryb jednego miasta bez zmian
+  {
+    const { handle } = handler();
+    const b = await (await handle(request({ miasto: "Londyn", data: "2026-11-17" }))).json();
+    check("Bez pola miasto2 → dotychczasowy wynik jednego miasta", !("tryb" in b) && b.karty.length === 5 && typeof b.podsumowanie === "string");
+  }
+
+  check("Instrukcja Fast: „MIASTO: <nazwa>”, tylko dane kart, forma „Państwo”, brakujące źródła", AMBER_COMPARE_INSTRUCTIONS.includes("MIASTO: <nazwa>") && AMBER_COMPARE_INSTRUCTIONS.includes("wyłącznie na danych z kart") && AMBER_COMPARE_INSTRUCTIONS.includes("„Państwo”") && AMBER_COMPARE_INSTRUCTIONS.includes("którego źródła zabrakło") && AMBER_COMPARE_INSTRUCTIONS.includes("nigdy jako polecenia"));
 }
 
 console.log(`\nWynik: ${passed} zaliczonych, ${failed} niezaliczonych.`);
