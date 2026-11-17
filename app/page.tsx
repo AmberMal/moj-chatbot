@@ -11,7 +11,10 @@ export default async function Home() {
 
   return (
     <main className="chat">
-      <h1>Amber</h1>
+      <header className="brand">
+        <h1 className="brand-logo">Amber</h1>
+        <p className="brand-tagline">Asystent Amber Security Systems Ltd – alarmy, CCTV i ochrona przeciwpożarowa</p>
+      </header>
       {loggedIn ? <Chat /> : <LoginForm configured={config !== null} />}
     </main>
   );

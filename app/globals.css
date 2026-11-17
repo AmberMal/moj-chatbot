@@ -1,117 +1,410 @@
+/* ==========================================================================
+   Amber – wygląd zgodny z logo firmy: żółty #F0C143 i czarne litery.
+   Zmieniony jest tylko wygląd – nazwy klas używane w komponentach zostają.
+   ========================================================================== */
+:root {
+  --accent: #f0c143;        /* żółty z logo Amber */
+  --accent-hover: #e0ae2a;
+  --accent-soft: #fef6dc;
+  --accent-line: #f1dc9c;
+  --accent-ink: #111111;    /* czarne litery na żółtym (kontrast 11:1) */
+  --link: #8a6100;          /* ciemny bursztyn dla linków (kontrast 5,5:1) */
+  --ink: #1a1a1a;
+  --muted: #5f5f5f;
+  --bg: #f6f5f1;
+  --surface: #ffffff;
+  --surface-alt: #f2f1ed;
+  --border: #e4e2dc;
+  --danger: #b42318;
+  --danger-soft: #fdecec;
+  --ok: #1e6b2f;
+  --ok-soft: #e3f4e6;
+  --radius: 14px;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 4px 16px rgba(0, 0, 0, 0.06);
+}
+
 * { box-sizing: border-box; }
-body { margin: 0; font-family: system-ui, sans-serif; background: #f5f5f5; }
-.chat { max-width: 640px; margin: 40px auto; padding: 0 16px; display: flex; flex-direction: column; gap: 16px; }
-h1 { margin: 0; }
-.messages { min-height: 360px; background: #fff; border: 1px solid #ddd; border-radius: 8px; }
-.composer { display: flex; gap: 8px; }
-.composer input { flex: 1; padding: 10px; border: 1px solid #ccc; border-radius: 6px; font-size: 16px; }
-.composer button { padding: 10px 18px; border: 0; border-radius: 6px; background: #222; color: #fff; font-size: 16px; cursor: pointer; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size: 16px;
+  line-height: 1.5;
+  color: var(--ink);
+  background: var(--bg);
+}
+a { color: var(--link); }
+:focus-visible { outline: 3px solid var(--accent-ink); outline-offset: 2px; }
 
-/* Czat */
-.messages { display: flex; flex-direction: column; gap: 10px; padding: 16px; }
-.message { max-width: 85%; padding: 10px 14px; border-radius: 12px; white-space: pre-wrap; line-height: 1.45; }
-.message.user { align-self: flex-end; background: #222; color: #fff; }
-.message.assistant { align-self: flex-start; background: #f0f0f0; color: #222; }
-.message.pending { color: #777; font-style: italic; }
-.hint { margin: auto; color: #888; }
-.error { margin: 0; padding: 10px 14px; border: 1px solid #e0a0a0; border-radius: 8px; background: #fdecec; color: #8a1f1f; }
-.composer button:disabled { opacity: 0.5; cursor: not-allowed; }
+/* Układ strony: wyśrodkowana kolumna o wygodnej szerokości */
+.chat {
+  max-width: 760px;
+  min-height: 100dvh;
+  margin: 0 auto;
+  padding: 24px 16px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+h1 { margin: 0; font-size: 26px; }
 
-/* Logowanie i wyjście */
-.login { display: flex; flex-direction: column; gap: 10px; }
-.login label { font-weight: 600; }
-.toolbar { display: flex; justify-content: flex-end; }
-.logout { padding: 6px 12px; border: 1px solid #ccc; border-radius: 6px; background: #fff; color: #222; font-size: 14px; cursor: pointer; }
+/* Nagłówek w stylu logo: żółty pasek, czarny napis AMBER */
+.brand {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.brand-logo {
+  align-self: flex-start;
+  margin: 0;
+  /* DIN Condensed ma duży zapas pod literami – większy odstęp u góry wyśrodkowuje napis w pionie. */
+  padding: 13px 22px 0 24px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-family: "DIN Condensed", "Arial Narrow", "Roboto Condensed", Impact, sans-serif;
+  font-size: 40px;
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.brand-tagline { margin: 0; color: var(--muted); font-size: 15px; }
 
-/* Lekcja 3: lista źródeł pod odpowiedzią Amber */
-.sources { margin-top: 10px; padding-top: 8px; border-top: 1px solid #ddd; font-size: 14px; white-space: normal; }
-.sources ul { margin: 4px 0; padding-left: 18px; }
-.sources a { color: #1a4fa0; word-break: break-word; }
-.sources small { color: #777; }
+/* Pasek z przyciskami „Dashboard podróży” i „Wyjdź” */
+.toolbar { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; }
+.logout {
+  display: inline-flex;
+  align-items: center;
+  min-height: 36px;
+  padding: 6px 14px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 14px;
+  font-family: inherit;
+  cursor: pointer;
+}
+.logout:hover:not(:disabled) { border-color: var(--accent-hover); background: var(--accent-soft); }
+.logout:disabled { opacity: 0.5; cursor: not-allowed; }
+.toolbar a.logout { text-decoration: none; }
 
-/* Lekcja 3: etykiety użytych narzędzi nad odpowiedzią Amber */
-.tool-labels { display: flex; gap: 6px; margin-bottom: 6px; white-space: normal; }
-.tool-label { font-size: 12px; padding: 2px 8px; border-radius: 10px; background: #e2e2e2; color: #444; }
-/* Lekcja 4 (ReAct): lista wykonanych kroków nad odpowiedzią */
-.agent-steps { font-size: 12px; color: #666; margin-bottom: 4px; white-space: normal; }
-/* Lekcja 4, Warsztat 2 (Standard): liczniki pod odpowiedzią */
-.agent-stats { display: block; margin-top: 6px; font-size: 11px; color: #888; white-space: normal; }
-/* Lekcja 4, Warsztat 2 (Fast): przycisk Stop i komunikat o przerwaniu */
-.composer button.stop { background: #b42318; color: #fff; }
-.stopped-note { display: block; margin-top: 6px; font-size: 12px; color: #b42318; white-space: normal; }
+/* Rozmowa */
+.messages {
+  flex: 1;
+  min-height: 360px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 20px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+.message {
+  max-width: 82%;
+  padding: 12px 16px;
+  border-radius: 18px;
+  white-space: pre-wrap;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+.message.user {
+  align-self: flex-end;
+  background: var(--accent);
+  color: var(--accent-ink);
+  border-bottom-right-radius: 6px;
+}
+.message.assistant {
+  align-self: flex-start;
+  background: var(--surface-alt);
+  color: var(--ink);
+  border-bottom-left-radius: 6px;
+}
+/* Stan „Amber pisze…”: pulsująca żółta kropka */
+.message.pending { color: var(--muted); font-style: italic; display: inline-flex; align-items: center; gap: 10px; }
+.message.pending::before {
+  content: "";
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 0 rgba(240, 193, 67, 0.7);
+  animation: amber-pulse 1.2s ease-in-out infinite;
+}
+@keyframes amber-pulse {
+  0% { box-shadow: 0 0 0 0 rgba(240, 193, 67, 0.7); }
+  70% { box-shadow: 0 0 0 8px rgba(240, 193, 67, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(240, 193, 67, 0); }
+}
+@media (prefers-reduced-motion: reduce) { .message.pending::before { animation: none; } }
+.hint { margin: auto; color: var(--muted); text-align: center; font-size: 14px; }
+.error {
+  margin: 0;
+  padding: 10px 14px;
+  border: 1px solid #e0a0a0;
+  border-radius: 12px;
+  background: var(--danger-soft);
+  color: #8a1f1f;
+}
 
-/* Lekcja 3: zdjęcia (Vision) i identyfikator modelu */
-.thumb { display: block; max-width: 220px; max-height: 220px; border-radius: 8px; margin-top: 6px; }
-.pending-image { display: flex; align-items: center; gap: 10px; font-size: 14px; color: #555; }
-.pending-image .thumb { max-width: 64px; max-height: 64px; margin: 0; }
-.pending-image button { border: 0; background: none; cursor: pointer; font-size: 16px; }
-.composer button.secondary { background: #f0f0f0; color: #222; border: 1px solid #ccc; }
-.model-id { display: block; margin-top: 6px; font-size: 12px; color: #888; }
-
-/* Lekcja 3 (B): wygenerowane obrazy */
-.generated { display: block; max-width: 100%; max-height: 360px; border-radius: 8px; }
-.image-request { opacity: 0.75; }
-.image-error { color: #8a1f1f; }
-.composer button { white-space: nowrap; }
-.composer input[type="text"] { min-width: 0; }
-
-/* Lekcja 3 (B): podpowiedzi opisów i przycisk „Pobierz” */
-.suggestions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: -6px; font-size: 13px; color: #777; }
-.suggestions button { padding: 4px 10px; border: 1px solid #ddd; border-radius: 14px; background: #fff; color: #333; font-size: 13px; cursor: pointer; text-align: left; }
-.suggestions button:hover:not(:disabled) { border-color: #b8860b; }
-.suggestions button:disabled { opacity: 0.5; cursor: not-allowed; }
-.image-footer { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 6px; white-space: normal; }
-.image-footer .model-id { margin-top: 0; }
-.download { padding: 4px 12px; border: 1px solid #ccc; border-radius: 6px; background: #fff; color: #222; font-size: 13px; text-decoration: none; }
-
-/* Warsztat 3: /api/agent – obraz z narzędzia modelu, analiza JSON, limit kroków */
-.composer { flex-wrap: wrap; }
+/* Pole wiadomości – przyklejone do dołu ekranu */
+.composer {
+  position: sticky;
+  bottom: 12px;
+  z-index: 5;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+.composer input {
+  flex: 1;
+  min-height: 46px;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: #fff;
+  color: var(--ink);
+  font-size: 16px;
+  font-family: inherit;
+}
+.composer input:focus { outline: none; border-color: var(--accent-ink); box-shadow: 0 0 0 3px var(--accent); }
 /* Pole wiadomości w pierwszym wierszu na całą szerokość, przyciski pod nim. */
 .composer input[type="text"] { flex: 1 1 100%; order: -1; min-width: 0; }
+.composer button {
+  flex: 1 1 130px;
+  min-height: 44px;
+  padding: 10px 16px;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-size: 15px;
+  font-weight: 600;
+  font-family: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.composer button:hover:not(:disabled) { background: var(--accent-hover); }
+.composer button:disabled { opacity: 0.45; cursor: not-allowed; }
+.composer button.secondary { background: var(--surface); color: var(--ink); border-color: var(--border); }
+.composer button.secondary:hover:not(:disabled) { background: var(--accent-soft); border-color: var(--accent-hover); }
+/* Lekcja 4, Warsztat 2 (Fast): przycisk Stop i komunikat o przerwaniu */
+.composer button.stop { background: var(--danger); color: #fff; border-color: var(--danger); }
+.composer button.stop:hover { background: #962015; }
+.stopped-note { display: block; margin-top: 6px; font-size: 12px; color: var(--danger); white-space: normal; }
+
+/* Logowanie – karta w tym samym stylu */
+.login {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+  max-width: 440px;
+  margin: 24px auto 0;
+  padding: 24px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-top: 6px solid var(--accent);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+.login label { font-weight: 600; }
+.login .composer { position: static; flex-wrap: nowrap; padding: 0; border: 0; box-shadow: none; }
+.login .composer button { flex: 0 0 auto; }
+
+/* Lekcja 3: etykiety użytych narzędzi – małe „pigułki” */
+.tool-labels { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; white-space: normal; }
+.tool-label {
+  font-size: 12px;
+  font-style: normal;
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-line);
+  color: #5a4200;
+}
+/* Lekcja 4 (ReAct): lista wykonanych kroków nad odpowiedzią */
+.agent-steps { font-size: 12px; color: var(--muted); margin-bottom: 6px; white-space: normal; }
+/* Lekcja 4, Warsztat 2 (Standard): liczniki pod odpowiedzią */
+.agent-stats { display: block; margin-top: 6px; font-size: 11px; color: var(--muted); white-space: normal; }
+
+/* Lekcja 3: lista źródeł – małe, schludne odnośniki */
+.sources { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border); font-size: 13px; white-space: normal; }
+.sources strong { display: block; margin-bottom: 6px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
+.sources ul { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 6px; padding: 0; list-style: none; }
+.sources li { max-width: 100%; }
+.sources a {
+  display: inline-block;
+  max-width: 100%;
+  padding: 3px 10px;
+  border: 1px solid var(--accent-line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--link);
+  text-decoration: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+.sources a:hover { background: var(--accent-soft); text-decoration: underline; }
+.sources small { color: var(--muted); }
+
+/* Lekcja 3: zdjęcia (Vision) i identyfikator modelu */
+.thumb { display: block; max-width: 220px; max-height: 220px; border-radius: 12px; margin-top: 6px; }
+.pending-image { display: flex; align-items: center; gap: 10px; font-size: 14px; color: var(--muted); }
+.pending-image .thumb { max-width: 64px; max-height: 64px; margin: 0; }
+.pending-image button { border: 0; background: none; cursor: pointer; font-size: 16px; }
+.model-id { display: block; margin-top: 6px; font-size: 12px; color: var(--muted); }
+
+/* Lekcja 3 (B): wygenerowane obrazy */
+.generated { display: block; max-width: 100%; max-height: 360px; border-radius: 12px; }
+.image-request { opacity: 0.75; }
+.image-error { color: #8a1f1f; }
 .generated-block { display: block; margin-top: 6px; }
+.generating { display: block; color: var(--muted); font-style: italic; }
+.image-footer { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 8px; white-space: normal; }
+.image-footer .model-id { margin-top: 0; }
 .generated-block .image-footer { display: flex; }
-.generating { display: block; color: #777; font-style: italic; }
-.analysis-json { margin: 0; padding: 10px; border-radius: 6px; background: #fff; border: 1px solid #ddd; font-size: 13px; white-space: pre-wrap; word-break: break-word; }
+.download {
+  padding: 5px 14px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-size: 13px;
+  font-weight: 600;
+  text-decoration: none;
+}
+.download:hover { background: var(--accent-hover); }
+
+/* Lekcja 3 (B): podpowiedzi opisów obrazu */
+.suggestions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); }
+/* Napis „Pomysły na obraz:” w osobnym wierszu, podpowiedzi pod nim. */
+.suggestions > span { flex-basis: 100%; font-weight: 600; }
+.suggestions button {
+  padding: 4px 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+.suggestions button:hover:not(:disabled) { border-color: var(--accent-hover); background: var(--accent-soft); }
+.suggestions button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* Warsztat 3: analiza JSON i limit kroków */
+.analysis-json {
+  margin: 0;
+  padding: 12px;
+  border-radius: 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  font-size: 13px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
 .step-limit { display: block; margin-top: 6px; font-size: 12px; color: #8a5a00; white-space: normal; }
 
 /* Lekcja 4, Warsztat 3: Dashboard podróży */
-.toolbar { gap: 8px; }
-.toolbar a.logout { text-decoration: none; }
-.page-nav a { color: #1a4fa0; text-decoration: none; font-size: 14px; }
+.page-nav a { color: var(--link); text-decoration: none; font-size: 14px; }
+.page-nav a:hover { text-decoration: underline; }
 .trip-form { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; }
 .trip-form label { display: flex; flex-direction: column; gap: 4px; font-weight: 600; font-size: 14px; flex: 1; min-width: 160px; }
-.trip-form input { padding: 10px; border: 1px solid #ccc; border-radius: 6px; font-size: 16px; font-weight: 400; }
-.trip-form button { padding: 10px 18px; border: 0; border-radius: 6px; background: #222; color: #fff; font-size: 16px; cursor: pointer; }
-.trip-form button:disabled { opacity: 0.5; cursor: not-allowed; }
+.trip-form input {
+  min-height: 44px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: #fff;
+  font-size: 16px;
+  font-weight: 400;
+  font-family: inherit;
+}
+.trip-form input:focus { outline: none; border-color: var(--accent-ink); box-shadow: 0 0 0 3px var(--accent); }
+.trip-form button {
+  min-height: 44px;
+  padding: 10px 18px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-size: 15px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+}
+.trip-form button:hover:not(:disabled) { background: var(--accent-hover); }
+.trip-form button:disabled { opacity: 0.45; cursor: not-allowed; }
 .trip-header { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
 .trip-header h2 { margin: 0; font-size: 18px; }
 .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px; margin-top: 10px; }
-.card { background: #fff; border: 1px solid #ddd; border-radius: 8px; padding: 12px; display: flex; flex-direction: column; gap: 6px; }
-.card h3 { margin: 0; font-size: 14px; color: #555; }
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+.card h3 { margin: 0; font-size: 14px; color: var(--muted); }
 .card-value { margin: 0; font-size: 18px; font-weight: 600; }
 .card-details { margin: 0; font-size: 14px; white-space: pre-wrap; }
-.card a { color: #1a4fa0; font-size: 14px; }
-.card small { color: #777; font-size: 12px; margin-top: auto; }
+.card a { color: var(--link); font-size: 14px; }
+.card small { color: var(--muted); font-size: 12px; margin-top: auto; }
 .card-error { border-color: #e0a0a0; background: #fdf6f6; }
-.trip-summary { margin-top: 12px; background: #fff; border: 1px solid #ddd; border-radius: 8px; padding: 12px; }
-.trip-summary p { margin: 6px 0 0; line-height: 1.45; }
+.trip-summary {
+  margin-top: 12px;
+  padding: 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 5px solid var(--accent);
+  border-radius: var(--radius);
+}
+.trip-summary p { margin: 6px 0 0; line-height: 1.5; }
 /* Lekcja 4, Warsztat 3 (Standard): stany kart */
-.card-state { display: inline-block; margin-left: 6px; padding: 1px 6px; border-radius: 8px; font-size: 11px; font-weight: 600; vertical-align: middle; }
-.state-ok { background: #e3f4e6; color: #1e6b2f; }
-.state-loading { background: #ececec; color: #666; }
+.card-state { display: inline-block; margin-left: 6px; padding: 1px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; vertical-align: middle; }
+.state-ok { background: var(--ok-soft); color: var(--ok); }
+.state-loading { background: #ececec; color: #555; }
 .state-missing { background: #fbe3e3; color: #8a1f1f; }
-.card-loading { color: #888; }
+.card-loading { color: var(--muted); }
 .card-missing { font-weight: 600; color: #8a1f1f; }
 .card-reason { color: #8a5a5a; font-size: 12px; }
 /* Lekcja 4, Warsztat 3 (Fast): tryb „Porównaj” */
-.mode-switch { display: inline-flex; align-self: flex-start; gap: 0; margin-bottom: 10px; border: 1px solid #ccc; border-radius: 6px; overflow: hidden; }
-.mode-switch button { padding: 8px 14px; border: 0; background: #fff; color: #222; font-size: 14px; cursor: pointer; }
-.mode-switch button.active { background: #222; color: #fff; }
+.mode-switch { display: inline-flex; align-self: flex-start; gap: 0; border: 1px solid var(--border); border-radius: 999px; overflow: hidden; background: var(--surface); }
+.mode-switch button { padding: 8px 16px; border: 0; background: transparent; color: var(--ink); font-size: 14px; font-family: inherit; cursor: pointer; }
+.mode-switch button.active { background: var(--accent); color: var(--accent-ink); font-weight: 600; }
 .mode-switch button:disabled { cursor: not-allowed; }
 .compare-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 10px; }
-.compare-column { border: 2px solid transparent; border-radius: 10px; padding: 6px; }
-.compare-column.recommended { border-color: #1e6b2f; }
+.compare-column { border: 2px solid transparent; border-radius: var(--radius); padding: 6px; }
+.compare-column.recommended { border-color: var(--ok); }
 .compare-column .cards { grid-template-columns: 1fr; }
 .compare-city { margin: 0; font-size: 16px; }
 .recommendation-city { font-weight: 600; }
-@media (max-width: 700px) { .compare-columns { grid-template-columns: 1fr; } }
+
+/* Telefon */
+@media (max-width: 700px) {
+  .compare-columns { grid-template-columns: 1fr; }
+}
+@media (max-width: 560px) {
+  .chat { padding: 16px 10px 10px; gap: 12px; }
+  .brand-logo { font-size: 32px; padding: 10px 17px 0 19px; }
+  .brand-tagline { font-size: 14px; }
+  .messages { padding: 14px; min-height: 300px; }
+  .message { max-width: 90%; }
+  .composer { bottom: 8px; padding: 10px; }
+  .composer button { flex: 1 1 calc(50% - 4px); }
+  .login { padding: 18px; margin-top: 12px; }
+}
