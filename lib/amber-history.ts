@@ -52,6 +52,8 @@ export const HISTORY_TOOL_NAMES = [
   "notatki",
   "diagnostyka",
   "przestepczosc",
+  // Lekcja 5, Warsztat 3: trwały profil klienta.
+  "zapiszProfil",
 ] as const;
 
 // Warsztat 3: odpowiedź czatu z /api/agent (mode=chat).
@@ -75,6 +77,7 @@ export const AGENT_TOOL_PART_TYPES = [
   "tool-notatki",
   "tool-diagnostyka",
   "tool-przestepczosc",
+  "tool-zapiszProfil",
 ] as const;
 // Lekcja 4, Warsztat 2 (Standard): 16 – tyle samo co limit wywołań narzędzi w jednym zadaniu (AGENT_TOOL_CALL_LIMIT).
 export const MAX_AGENT_TOOL_PARTS = 16;

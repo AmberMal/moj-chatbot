@@ -26,7 +26,8 @@ import {
   signAgentChatTurn,
 } from "../../../lib/amber-history";
 import { createAgentHandler } from "../../../lib/amber-agent";
-import { getConversationStore } from "../../../lib/supabase";
+import { getConversationStore, getProfileStore } from "../../../lib/supabase";
+import { createProfileTool, profileInstructions } from "../../../lib/amber-profile";
 
 // Warsztat 3: jeden endpoint, dwa tryby (mode=chat, mode=analyze). Logika: lib/amber-agent.ts.
 // Ten plik działa tylko na serwerze – klucz API nie trafia do przeglądarki.
@@ -85,6 +86,9 @@ export async function POST(req: Request) {
         czas,
         notatki: createNotesTool(sessionId),
       };
+      // Lekcja 5, Warsztat 3: zapis faktów o kliencie w user_profiles (tylko gdy Supabase jest skonfigurowany).
+      const profileStore = getProfileStore();
+      if (profileStore) tools.zapiszProfil = createProfileTool(profileStore);
       if (DEV_DIAGNOSTICS) {
         // Tylko przy npm run dev. Zwraca „konfiguracja kompletna: tak/nie” – bez nazw zmiennych i wartości.
         tools.diagnostyka = createDiagnosticsTool({ env: process.env });
@@ -97,6 +101,11 @@ export async function POST(req: Request) {
     maxTextChars: MAX_USER_MESSAGE_CHARS,
     // Lekcja 5, Warsztat 2: zapis rozmów w Supabase (po sprawdzeniu sesji i po zakończeniu odpowiedzi).
     conversations: getConversationStore,
+    // Lekcja 5, Warsztat 3: profil klienta jako dane w instrukcjach (przed każdą odpowiedzią).
+    profileInstructions: async () => {
+      const store = getProfileStore();
+      return store ? profileInstructions(await store.load()) : "";
+    },
     // Dla szybkich: tytuł nowej rozmowy od modelu – po wysłaniu odpowiedzi (after z Next.js; błąd tylko w logu).
     runAfterResponse: (task) =>
       after(async () => {

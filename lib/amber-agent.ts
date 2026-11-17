@@ -48,6 +48,8 @@ export const AGENT_TOOL_NAMES = [
   "notatki",
   "diagnostyka",
   "przestepczosc",
+  // Lekcja 5, Warsztat 3: trwały profil klienta (user_profiles).
+  "zapiszProfil",
 ] as const;
 // Etykiety użytych narzędzi w metadanych (te same nazwy co w lib/amber-history.ts).
 const LABEL_ORDER = [
@@ -64,6 +66,7 @@ const LABEL_ORDER = [
   "kalkulator",
   "notatki",
   "diagnostyka",
+  "zapiszProfil",
   "generujObraz",
 ] as const;
 // Lekcja 4, Warsztat 2 (ReAct): najwyżej 6 kroków modelu na jedno zadanie. Wszystkie mogą używać narzędzi.
@@ -287,6 +290,9 @@ export type AgentDeps = {
   // Warsztat 2 (Dla szybkich): praca po wysłaniu odpowiedzi (w aplikacji: after() z Next.js) – tytuł nowej rozmowy.
   // Brak = bez tytułu od modelu (zostaje początek pierwszej wiadomości).
   runAfterResponse?: (task: () => Promise<unknown>) => void;
+  // Lekcja 5, Warsztat 3: profil klienta jako DANE dołączane do instrukcji czatu przed każdą odpowiedzią
+  // ("" = brak profilu). Błąd odczytu → odpowiedź bez profilu (szczegóły w logu).
+  profileInstructions?: () => Promise<string>;
 };
 
 // conversationId (lekcja 5) – numer rozmowy w bazie; jak stats służy tylko przeglądarce i nie wraca na serwer.
@@ -539,7 +545,19 @@ export function createAgentHandler(deps: AgentDeps) {
       return Response.json({ analysis: result.output, ...(result.modelId ? { model: result.modelId } : {}) });
     }
 
-    return streamChat({ req, deps, models, turns, historyKey: historyKey!, sessionId, conversationId, log, now, startedAt });
+    // Warsztat 3: profil z bazy → dopisany do instrukcji czatu (po sprawdzeniu sesji i historii, przed modelem).
+    let chatInstructions = deps.instructions.chat;
+    if (deps.profileInstructions) {
+      try {
+        const profile = await deps.profileInstructions();
+        if (profile) chatInstructions = `${chatInstructions}\n\n${profile}`;
+      } catch (error) {
+        const details = error instanceof Error ? error.message : String(error);
+        console.error(`[Amber] /api/agent – nie wczytano profilu klienta: ${details.slice(0, 300)}`);
+      }
+    }
+
+    return streamChat({ req, deps, models, turns, historyKey: historyKey!, sessionId, conversationId, chatInstructions, log, now, startedAt });
   };
 }
 
@@ -552,6 +570,7 @@ function streamChat({
   historyKey,
   sessionId,
   conversationId,
+  chatInstructions,
   log,
   now,
   startedAt,
@@ -563,6 +582,7 @@ function streamChat({
   historyKey: Buffer;
   sessionId: string;
   conversationId: number | null;
+  chatInstructions: string;
   log: (message: string) => void;
   now: () => Date;
   startedAt: number;
@@ -581,7 +601,7 @@ function streamChat({
 
   const result = streamText({
     model: models.model,
-    instructions: deps.instructions.chat,
+    instructions: chatInstructions,
     messages: toModelMessages(turns),
     tools: withToolBudget(withToolGuards(models.tools, guard, deps.toolTimeoutMs ?? AGENT_TOOL_TIMEOUT_MS), budget),
     stopWhen: isStepCount(stepLimit),

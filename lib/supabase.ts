@@ -9,6 +9,7 @@ import {
   createSupabaseConversationDb,
   type ConversationStore,
 } from "./amber-conversations";
+import { createProfileStore, createSupabaseProfileDb, type ProfileStore } from "./amber-profile";
 
 let cached: SupabaseClient | null = null;
 
@@ -28,4 +29,10 @@ export function getSupabase(): SupabaseClient | null {
 export function getConversationStore(): ConversationStore | null {
   const client = getSupabase();
   return client ? createConversationStore(createSupabaseConversationDb(client)) : null;
+}
+
+// Lekcja 5, Warsztat 3: profil użytkownika (lib/amber-profile.ts). null = brak konfiguracji Supabase.
+export function getProfileStore(): ProfileStore | null {
+  const client = getSupabase();
+  return client ? createProfileStore(createSupabaseProfileDb(client)) : null;
 }
