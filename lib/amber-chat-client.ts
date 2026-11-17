@@ -71,6 +71,28 @@ function withoutStats(metadata: unknown): unknown {
 // ---------------------------------------------------------------------------
 
 export const LATEST_CONVERSATION_API = "/api/conversations/latest";
+
+// Warsztat 2 (Standard): adres strony pokazuje bieżącą rozmowę – F5 zostaje w tej samej rozmowie.
+//   /?c=12   – rozmowa 12 (kliknięcie na /history),
+//   /?new=1  – nowa, pusta rozmowa (przycisk „Nowa rozmowa”),
+//   /        – ostatnia rozmowa z bazy.
+export const HISTORY_PAGE = "/history";
+export const NEW_CONVERSATION_URL = "/?new=1";
+export const conversationPageUrl = (id: number) => `/?c=${id}`;
+export const conversationApiUrl = (id: number) => `/api/conversations/${id}`;
+
+export type ConversationTarget = { kind: "new" } | { kind: "id"; id: number } | { kind: "latest" };
+
+// Ta sama reguła numeru co parseConversationParam w lib/amber-conversations.ts (sprawdza to test).
+export function conversationFromSearch(search: string): ConversationTarget {
+  const params = new URLSearchParams(search);
+  if (params.get("new") === "1") return { kind: "new" };
+  const raw = params.get("c");
+  if (raw !== null && /^[1-9][0-9]{0,15}$/.test(raw) && Number.isSafeInteger(Number(raw))) {
+    return { kind: "id", id: Number(raw) };
+  }
+  return { kind: "latest" };
+}
 export const HISTORY_LOADING_MESSAGE = "Wczytuję rozmowę…";
 export const HISTORY_LOAD_ERROR = "Nie udało się wczytać poprzedniej rozmowy. Możesz pisać dalej – zacznie się nowa rozmowa.";
 

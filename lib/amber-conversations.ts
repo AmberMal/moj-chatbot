@@ -24,10 +24,18 @@ export const MAX_LOADED_MESSAGES = 98;
 // Taki sam limit jak MAX_USER_MESSAGE_CHARS w lib/amber-history.ts (sprawdza to test).
 export const MAX_STORED_USER_CHARS = 4000;
 
+// Warsztat 2 (Standard): najwyżej tyle rozmów na stronie /history (najnowsze).
+export const MAX_LISTED_CONVERSATIONS = 100;
+
 export const CONVERSATION_MESSAGES = {
   unauthorized: "Brak dostępu: zaloguj się hasłem warsztatowym.",
   loadError: "Nie udało się wczytać rozmowy z bazy. Odśwież stronę za chwilę.",
+  badId: "Nieprawidłowy numer rozmowy.",
+  notFound: "Nie znaleziono tej rozmowy.",
 } as const;
+
+// Pozycja na liście /history.
+export type ConversationSummary = { id: number; title: string; createdAt: string; messageCount: number };
 
 export type StoredRole = "user" | "assistant";
 export type StoredMessage = { id: number; role: StoredRole; content: string };
@@ -39,6 +47,7 @@ export type ConversationDb = {
   insertMessages: (rows: { conversation_id: number; role: StoredRole; content: string }[]) => Promise<void>;
   latestConversationId: () => Promise<number | null>;
   loadMessages: (conversationId: number, limit: number) => Promise<StoredMessage[]>;
+  listConversations: (limit: number) => Promise<ConversationSummary[]>;
 };
 
 // ---------------------------------------------------------------------------
@@ -79,6 +88,9 @@ export type ConversationStore = {
   // Zwraca numer rozmowy, do której zapisano wiadomości.
   saveExchange: (input: { conversationId: number | null; turns: ChatTurn[]; replyText: string; generatedImage: boolean }) => Promise<number>;
   loadLatest: () => Promise<{ conversationId: number; messages: StoredMessage[] } | null>;
+  // Warsztat 2 (Standard): wybrana rozmowa (null = nie ma takiej) i lista rozmów (najnowsze na górze).
+  load: (conversationId: number) => Promise<{ conversationId: number; messages: StoredMessage[] } | null>;
+  list: () => Promise<ConversationSummary[]>;
 };
 
 export function createConversationStore(db: ConversationDb): ConversationStore {
@@ -102,7 +114,41 @@ export function createConversationStore(db: ConversationDb): ConversationStore {
       const messages = await db.loadMessages(conversationId, MAX_LOADED_MESSAGES);
       return { conversationId, messages };
     },
+    async load(conversationId) {
+      if (!(await db.conversationExists(conversationId))) return null;
+      const messages = await db.loadMessages(conversationId, MAX_LOADED_MESSAGES);
+      return { conversationId, messages };
+    },
+    async list() {
+      return db.listConversations(MAX_LISTED_CONVERSATIONS);
+    },
   };
+}
+
+// Numer rozmowy z adresu (/?c=12, /api/conversations/12): tylko dodatnia liczba całkowita zapisana cyframi.
+export function parseConversationParam(value: string | null | undefined): number | null {
+  if (typeof value !== "string" || !/^[1-9][0-9]{0,15}$/.test(value)) return null;
+  const id = Number(value);
+  return Number.isSafeInteger(id) ? id : null;
+}
+
+// „1 wiadomość”, poza tym zawsze „… wiadomości” (2, 5, 12, 22 – po polsku ta sama forma).
+export function formatMessageCount(count: number): string {
+  return count === 1 ? "1 wiadomość" : `${count} wiadomości`;
+}
+
+// Data rozmowy, czas Londynu (np. „17.11.2026, 19:13”).
+export function formatConversationDate(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "";
+  return new Intl.DateTimeFormat("pl-PL", {
+    timeZone: "Europe/London",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
 }
 
 // Wiadomości z bazy → wiadomości czatu (useChat). Odpowiedzi Amber dostają podpis v5 dla bieżącej sesji.
@@ -122,37 +168,55 @@ export function toSignedUIMessages(
   });
 }
 
-// GET /api/conversations/latest – najpierw sesja (bez niej 401), dopiero potem baza.
-export function createLatestConversationHandler(deps: {
+type ConversationHandlerDeps = {
   getSession: (req: Request) => { secret: string; token: string } | null;
   getStore: () => ConversationStore | null;
   sign: (session: { secret: string; token: string }, history: ChatTurn[]) => string;
-  log?: (message: string) => void;
-}) {
-  const noStore = { "Cache-Control": "no-store" };
-  return async function handleLatest(req: Request): Promise<Response> {
-    const session = deps.getSession(req);
-    if (!session) {
-      return new Response(CONVERSATION_MESSAGES.unauthorized, {
-        status: 401,
-        headers: { "Content-Type": "text/plain; charset=utf-8" },
-      });
-    }
-    const store = deps.getStore();
-    if (!store) return Response.json({ conversationId: null, messages: [] }, { headers: noStore });
-    try {
-      const latest = await store.loadLatest();
-      if (!latest) return Response.json({ conversationId: null, messages: [] }, { headers: noStore });
-      const messages = toSignedUIMessages(latest.messages, (history) => deps.sign(session, history));
-      return Response.json({ conversationId: latest.conversationId, messages }, { headers: noStore });
-    } catch (error) {
-      const details = error instanceof Error ? error.message : String(error);
-      console.error(`[Amber] /api/conversations/latest – błąd bazy: ${details.slice(0, 300)}`);
-      return new Response(CONVERSATION_MESSAGES.loadError, {
-        status: 502,
-        headers: { "Content-Type": "text/plain; charset=utf-8" },
-      });
-    }
+};
+const NO_STORE = { "Cache-Control": "no-store" };
+const plain = (message: string, status: number) =>
+  new Response(message, { status, headers: { "Content-Type": "text/plain; charset=utf-8", ...NO_STORE } });
+
+// Wspólny odczyt: najpierw sesja (bez niej 401), dopiero potem baza; odpowiedzi Amber podpisane dla tej sesji.
+async function respondWithConversation(
+  deps: ConversationHandlerDeps,
+  req: Request,
+  label: string,
+  read: (store: ConversationStore) => Promise<{ conversationId: number; messages: StoredMessage[] } | null | "not-found">,
+): Promise<Response> {
+  const session = deps.getSession(req);
+  if (!session) return plain(CONVERSATION_MESSAGES.unauthorized, 401);
+  const store = deps.getStore();
+  if (!store) return Response.json({ conversationId: null, messages: [] }, { headers: NO_STORE });
+  try {
+    const found = await read(store);
+    if (found === "not-found") return plain(CONVERSATION_MESSAGES.notFound, 404);
+    if (!found) return Response.json({ conversationId: null, messages: [] }, { headers: NO_STORE });
+    const messages = toSignedUIMessages(found.messages, (history) => deps.sign(session, history));
+    return Response.json({ conversationId: found.conversationId, messages }, { headers: NO_STORE });
+  } catch (error) {
+    const details = error instanceof Error ? error.message : String(error);
+    console.error(`[Amber] ${label} – błąd bazy: ${details.slice(0, 300)}`);
+    return plain(CONVERSATION_MESSAGES.loadError, 502);
+  }
+}
+
+// GET /api/conversations/latest – ostatnia rozmowa (po odświeżeniu strony bez numeru rozmowy w adresie).
+export function createLatestConversationHandler(deps: ConversationHandlerDeps) {
+  return (req: Request) =>
+    respondWithConversation(deps, req, "/api/conversations/latest", (store) => store.loadLatest());
+}
+
+// Warsztat 2 (Standard): GET /api/conversations/[id] – wybrana rozmowa (z /history albo /?c=12).
+// Kolejność: sesja → numer rozmowy → baza.
+export function createConversationByIdHandler(deps: ConversationHandlerDeps) {
+  return async (req: Request, rawId: string) => {
+    if (!deps.getSession(req)) return plain(CONVERSATION_MESSAGES.unauthorized, 401);
+    const id = parseConversationParam(rawId);
+    if (id === null) return plain(CONVERSATION_MESSAGES.badId, 400);
+    return respondWithConversation(deps, req, "/api/conversations/[id]", async (store) =>
+      (await store.load(id)) ?? "not-found",
+    );
   };
 }
 
@@ -191,6 +255,25 @@ export function createSupabaseConversationDb(client: SupabaseClient): Conversati
       if (error) throw dbError("ostatnia rozmowa", error);
       const value = (data as { conversation_id?: unknown } | null)?.conversation_id;
       return value === undefined || value === null ? null : Number(value);
+    },
+    async listConversations(limit) {
+      // Najnowsze na górze; liczba wiadomości z powiązanej tabeli messages (relacja conversation_id).
+      const { data, error } = await client
+        .from("conversations")
+        .select("id, title, created_at, messages(count)")
+        .order("created_at", { ascending: false })
+        .order("id", { ascending: false })
+        .limit(limit);
+      if (error) throw dbError("lista rozmów", error);
+      return ((data ?? []) as { id: unknown; title: unknown; created_at: unknown; messages?: unknown }[]).map((row) => {
+        const counted = Array.isArray(row.messages) ? (row.messages[0] as { count?: unknown } | undefined)?.count : undefined;
+        return {
+          id: Number(row.id),
+          title: typeof row.title === "string" && row.title.trim() ? row.title : "Bez tytułu",
+          createdAt: typeof row.created_at === "string" ? row.created_at : "",
+          messageCount: typeof counted === "number" ? counted : 0,
+        };
+      });
     },
     async loadMessages(conversationId, limit) {
       const { data, error } = await client

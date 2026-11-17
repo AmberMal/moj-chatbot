@@ -18,8 +18,12 @@ import {
   MAX_STORED_USER_CHARS,
   assistantTextForStorage,
   conversationTitle,
+  createConversationByIdHandler,
   createConversationStore,
   createLatestConversationHandler,
+  formatConversationDate,
+  formatMessageCount,
+  parseConversationParam,
   createSupabaseConversationDb,
   toSignedUIMessages,
   unansweredUserTurns,
@@ -28,6 +32,10 @@ import {
 import {
   HISTORY_LOAD_ERROR,
   LATEST_CONVERSATION_API,
+  NEW_CONVERSATION_URL,
+  conversationApiUrl,
+  conversationFromSearch,
+  conversationPageUrl,
   prepareAgentMessages,
   readConversationId,
   readLatestConversation,
@@ -86,7 +94,19 @@ function fakeDb({ failInsert = false } = {}) {
   let nextMsg = 1;
   db.api = {
     async conversationExists(id) { db.calls++; return db.conversations.some((c) => c.id === id); },
-    async createConversation(title) { db.calls++; const id = nextConv++; db.conversations.push({ id, title }); return id; },
+    async createConversation(title) {
+      db.calls++;
+      const id = nextConv++;
+      db.conversations.push({ id, title, created_at: new Date(Date.UTC(2026, 10, 17, 19, id)).toISOString() });
+      return id;
+    },
+    async listConversations(limit) {
+      db.calls++;
+      return [...db.conversations]
+        .sort((a, b) => b.created_at.localeCompare(a.created_at) || b.id - a.id)
+        .slice(0, limit)
+        .map((c) => ({ id: c.id, title: c.title, createdAt: c.created_at, messageCount: db.messages.filter((m) => m.conversation_id === c.id).length }));
+    },
     async insertMessages(rows) {
       db.calls++;
       db.insertCalls++;
@@ -139,6 +159,17 @@ async function readChat(response) {
 }
 const user = (id, text) => ({ id, role: "user", parts: [{ type: "text", text }] });
 const latestRequest = (cookie = COOKIE) => new Request(`http://localhost${LATEST_CONVERSATION_API}`, { headers: cookie ? { cookie } : {} });
+function byIdHandler(getStore) {
+  return createConversationByIdHandler({
+    getSession: (req) => {
+      const token = readCookie(req, SESSION_COOKIE);
+      return token && isSessionValid(token, AUTH) ? { secret: AUTH.secret, token } : null;
+    },
+    getStore,
+    sign: (session, history) => signAgentChatTurn(deriveHistoryKey(session.secret), sessionIdFromToken(session.token), history, {}),
+  });
+}
+const byIdRequest = (id, cookie = COOKIE) => new Request(`http://localhost/api/conversations/${id}`, { headers: cookie ? { cookie } : {} });
 function latestHandler(getStore) {
   return createLatestConversationHandler({
     getSession: (req) => {
@@ -392,12 +423,141 @@ console.log("\n=== 7. Bezpieczeństwo i interfejs (kod źródłowy) ===");
   check("Agent dostaje zapis rozmów (conversations: getConversationStore)", agentRoute.includes("conversations: getConversationStore"));
   check("Przycisk „Nowa rozmowa” w czacie", ui.includes("Nowa rozmowa") && ui.includes("onClick={handleNewConversation}"));
   check("„Nowa rozmowa” nie kasuje niczego w bazie (bez fetch/DELETE)", !/handleNewConversation\(\)\s*\{[^}]*fetch/.test(ui) && !ui.includes('"DELETE"'));
-  check("Po otwarciu strony czat wczytuje ostatnią rozmowę", ui.includes("fetch(LATEST_CONVERSATION_API") && ui.includes("setMessages(data.messages)"));
+  check("Po otwarciu strony czat wczytuje ostatnią rozmowę", ui.includes(": LATEST_CONVERSATION_API") && ui.includes("fetch(url") && ui.includes("setMessages(data.messages)"));
   check("Każda wiadomość wysyłana z numerem rozmowy (sendChat)", (ui.match(/sendMessage\(/g) ?? []).length === 1 && ui.includes("body: { conversationId: conversationIdRef.current }") &&
     (ui.match(/sendChat\(/g) ?? []).length === 3);
   check("Podczas wczytywania przyciski są zablokowane", ui.includes('historyStatus === "loading"') && ui.includes("isLocked = isBusy || isGenerating || isAnalyzing || historyStatus"));
   check("Komunikat o błędzie wczytywania po polsku", HISTORY_LOAD_ERROR.startsWith("Nie udało się wczytać"));
   check("Destrukturyzacja useChat bez zmian (stop, setMessages)", ui.includes("const { messages, sendMessage, status, error, clearError, stop, setMessages } = useChat({"));
+}
+
+console.log("\n=== 8. Standard: lista rozmów, numer w adresie, format ===");
+{
+  for (const [raw, expected] of [["12", 12], ["1", 1], ["0", null], ["-1", null], ["1.5", null], ["01", null], ["abc", null], ["", null], [null, null], ["12abc", null], ["99999999999999999", null]]) {
+    check(`parseConversationParam(${JSON.stringify(raw)}) → ${expected}`, parseConversationParam(raw) === expected);
+    const target = conversationFromSearch(raw === null ? "" : `?c=${raw}`);
+    check(`  przeglądarka: ?c=${raw ?? ""} → ${expected === null ? "ostatnia rozmowa" : `rozmowa ${expected}`} (ta sama reguła)`,
+      expected === null ? target.kind === "latest" : target.kind === "id" && target.id === expected);
+  }
+  check("?new=1 → nowa rozmowa (bez wczytywania)", conversationFromSearch("?new=1").kind === "new" && conversationFromSearch("?new=1&c=5").kind === "new");
+  check("Adresy: /?c=7, /?new=1, /api/conversations/7", conversationPageUrl(7) === "/?c=7" && NEW_CONVERSATION_URL === "/?new=1" && conversationApiUrl(7) === "/api/conversations/7");
+  check("Liczba wiadomości po polsku", formatMessageCount(1) === "1 wiadomość" && formatMessageCount(2) === "2 wiadomości" &&
+    formatMessageCount(5) === "5 wiadomości" && formatMessageCount(12) === "12 wiadomości" && formatMessageCount(0) === "0 wiadomości");
+  check("Data rozmowy – czas Londynu", formatConversationDate("2026-11-17T19:13:01.032046+00:00") === "17.11.2026, 19:13", formatConversationDate("2026-11-17T19:13:01.032046+00:00"));
+  check("Data rozmowy – lato (BST, +1 h)", formatConversationDate("2026-07-01T10:00:00Z") === "01.07.2026, 11:00");
+  check("Zła data → pusty tekst", formatConversationDate("nie-data") === "");
+}
+
+console.log("\n=== 9. Standard: dwie rozmowy się nie mieszają, kolejność i brak duplikatów ===");
+{
+  const db = fakeDb();
+  const store = createConversationStore(db.api);
+  const getStore = () => store;
+  const { handle } = handler({ model: chatModel([[...textChunks("Odpowiedź Amber"), stop]]), store });
+  const say = async (conversationId, history, text) => {
+    const body = { mode: "chat", messages: [...prepareAgentMessages(history), user(`u-${text}`, text)], ...(conversationId ? { conversationId } : {}) };
+    const { message } = await readChat(await handle(request(body)));
+    return { id: message.metadata?.conversationId, history: [...history, user(`u-${text}`, text), message] };
+  };
+  // Rozmowa A (alarmy) i rozmowa B (CCTV).
+  let a = await say(null, [], "Alarm do domu");
+  a = await say(a.id, a.history, "Ile kosztuje?");
+  let b = await say(null, [], "Monitoring CCTV");
+  check("Dwie rozmowy w bazie: A = 1 (4 wiadomości), B = 2 (2 wiadomości)", a.id === 1 && b.id === 2 &&
+    db.messages.filter((m) => m.conversation_id === 1).length === 4 && db.messages.filter((m) => m.conversation_id === 2).length === 2);
+  const list = await store.list();
+  check("Lista /history: najnowsze na górze (B, potem A)", list.map((c) => c.id).join(",") === "2,1", JSON.stringify(list.map((c) => c.id)));
+  check("Lista: tytuł z początku pierwszej wiadomości i liczba wiadomości", list[1].title === "Alarm do domu" && list[1].messageCount === 4 && list[0].messageCount === 2);
+
+  // Otwieramy starszą rozmowę (A) z /history – tak jak przeglądarka: GET /api/conversations/1.
+  const r = await byIdHandler(getStore)(byIdRequest("1"), "1");
+  const opened = readLatestConversation(await r.json());
+  check("GET /api/conversations/1 → tylko wiadomości rozmowy A, w kolejności",
+    opened?.conversationId === 1 && opened.messages.map((m) => m.parts[0].text).join(" | ") === "Alarm do domu | Odpowiedź Amber | Ile kosztuje? | Odpowiedź Amber");
+  const appended = await say(opened.conversationId, opened.messages, "A z montażem?");
+  check("Dopisana wiadomość trafia do rozmowy A (nie do B)", appended.id === 1 &&
+    db.messages.filter((m) => m.conversation_id === 1).length === 6 && db.messages.filter((m) => m.conversation_id === 2).length === 2);
+  // „F5”: ponowne wczytanie rozmowy A.
+  const again = readLatestConversation(await (await byIdHandler(getStore)(byIdRequest("1"), "1")).json());
+  check("Po F5: wiadomość jest w rozmowie A, na końcu, bez podwójnych wpisów",
+    again.messages.length === 6 && again.messages[4].parts[0].text === "A z montażem?" &&
+    new Set(again.messages.map((m) => m.id)).size === 6 && db.messages.length === 8);
+  check("Po F5 historia A przechodzi kontrolę podpisów", checkChatHistory([...prepareAgentMessages(again.messages), user("x", "x")], { key: KEY, sessionId: SESSION_ID }).ok === true);
+  check("Bez numeru w adresie (/) → ostatnio używana rozmowa (A)", (await store.loadLatest()).conversationId === 1);
+  const bLoaded = readLatestConversation(await (await byIdHandler(getStore)(byIdRequest("2"), "2")).json());
+  check("Rozmowa B bez zmian (tylko jej 2 wiadomości)", bLoaded.messages.length === 2 && bLoaded.messages[0].parts[0].text === "Monitoring CCTV");
+}
+
+console.log("\n=== 10. Standard: GET /api/conversations/[id] – sesja, numer, brak rozmowy ===");
+{
+  const db = fakeDb();
+  const store = createConversationStore(db.api);
+  await store.saveExchange({ conversationId: null, turns: [{ role: "user", text: "Dzień dobry" }], replyText: "Dzień dobry!", generatedImage: false });
+  let storeCalls = 0;
+  const handle = byIdHandler(() => { storeCalls++; return store; });
+  const before = db.calls;
+  let r = await handle(byIdRequest("1", ""), "1");
+  check("Bez sesji → 401", r.status === 401 && (await r.text()) === CONVERSATION_MESSAGES.unauthorized);
+  r = await handle(byIdRequest("abc", ""), "abc");
+  check("Bez sesji → 401 nawet przy złym numerze (sesja jest pierwsza)", r.status === 401);
+  check("Bez sesji baza nie jest odczytywana", storeCalls === 0 && db.calls === before);
+  r = await handle(byIdRequest("abc"), "abc");
+  check("Zły numer → 400, bez odczytu bazy", r.status === 400 && (await r.text()) === CONVERSATION_MESSAGES.badId && db.calls === before);
+  r = await handle(byIdRequest("999"), "999");
+  check("Nie ma takiej rozmowy → 404", r.status === 404 && (await r.text()) === CONVERSATION_MESSAGES.notFound);
+  r = await handle(byIdRequest("1"), "1");
+  check("Rozmowa 1 → 200, no-store", r.status === 200 && r.headers.get("cache-control") === "no-store" && (await r.json()).messages.length === 2);
+  const broken = createConversationStore({ ...db.api, conversationExists: async () => { throw new Error("Supabase (sprawdzenie rozmowy): 42501 permission denied"); } });
+  r = await silence(() => byIdHandler(() => broken)(byIdRequest("1"), "1"));
+  const body = await r.text();
+  check("Błąd bazy → 502 po polsku, bez szczegółów", r.status === 502 && body === CONVERSATION_MESSAGES.loadError && !body.includes("42501"));
+}
+
+console.log("\n=== 11. Standard: Supabase – lista rozmów ===");
+{
+  const calls = [];
+  const client = {
+    from(table) {
+      const chain = { table, steps: [] };
+      calls.push(chain);
+      const builder = new Proxy({}, {
+        get(_, name) {
+          if (name === "then") return (resolve) => resolve({ data: [
+            { id: 2, title: "Monitoring CCTV", created_at: "2026-11-17T19:15:37Z", messages: [{ count: 2 }] },
+            { id: 1, title: "", created_at: "2026-11-17T19:13:01Z", messages: [] },
+          ], error: null });
+          return (...args) => { chain.steps.push([name, ...args]); return builder; };
+        },
+      });
+      return builder;
+    },
+  };
+  const list = await createSupabaseConversationDb(client).listConversations(100);
+  const steps = calls[0].steps;
+  check("Zapytanie: conversations z liczbą wiadomości (messages(count))", calls[0].table === "conversations" &&
+    JSON.stringify(steps[0]) === JSON.stringify(["select", "id, title, created_at, messages(count)"]));
+  check("Kolejność: najnowsze na górze (created_at malejąco), limit 100",
+    JSON.stringify(steps[1]) === JSON.stringify(["order", "created_at", { ascending: false }]) && JSON.stringify(steps.at(-1)) === JSON.stringify(["limit", 100]));
+  check("Wynik: liczba wiadomości i „Bez tytułu” dla pustego tytułu", list[0].messageCount === 2 && list[1].messageCount === 0 && list[1].title === "Bez tytułu");
+}
+
+console.log("\n=== 12. Standard: strona /history i czat (kod źródłowy) ===");
+{
+  const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
+  const page = read("app/history/page.tsx");
+  const ui = read("app/chat.tsx");
+  const byId = read("app/api/conversations/[id]/route.ts");
+  check("/history: sesja sprawdzana przed odczytem bazy", page.includes("isSessionValid") &&
+    page.indexOf("isSessionValid(") < page.indexOf("getConversationStore()") && page.includes("if (loggedIn)"));
+  check("/history: bez sesji formularz hasła", page.includes("<LoginForm"));
+  check("/history: kliknięcie otwiera rozmowę w czacie (/?c=numer)", page.includes("href={`/?c=${conversation.id}`}"));
+  check("/history: tytuł, data i liczba wiadomości", page.includes("conversation.title") && page.includes("formatConversationDate") && page.includes("formatMessageCount"));
+  check("/history: przycisk „Nowa rozmowa”", page.includes('href="/?new=1"') && page.includes("Nowa rozmowa"));
+  check("/history: przeglądarka nie dostaje klucza (komponent serwerowy, bez \"use client\")", !page.includes('"use client"') && !page.includes("SUPABASE_"));
+  check("Endpoint [id] sprawdza sesję", byId.includes("isSessionValid") && byId.includes("createConversationByIdHandler"));
+  check("Czat: link „Historia”", ui.includes("href={HISTORY_PAGE}") && ui.includes("Historia"));
+  check("Czat: wczytanie wybranej rozmowy z adresu (/?c=…)", ui.includes("conversationFromSearch(window.location.search)") && ui.includes("conversationApiUrl(target.id)"));
+  check("Czat: adres pokazuje bieżącą rozmowę (replaceState)", (ui.match(/window\.history\.replaceState/g) ?? []).length >= 3);
 }
 
 console.log(`\nWynik: ${passed} zaliczonych, ${failed} niezaliczonych.`);

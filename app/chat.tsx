@@ -9,7 +9,12 @@ import {
   AGENT_API,
   HISTORY_LOAD_ERROR,
   HISTORY_LOADING_MESSAGE,
+  HISTORY_PAGE,
   LATEST_CONVERSATION_API,
+  NEW_CONVERSATION_URL,
+  conversationApiUrl,
+  conversationFromSearch,
+  conversationPageUrl,
   MAX_IMAGE_DESCRIPTION_CHARS,
   NO_IMAGE_MESSAGE,
   STEP_LIMIT_MESSAGE,
@@ -143,7 +148,11 @@ export default function Chat() {
     onFinish: ({ message, messages: all, finishReason, isError, isAbort }) => {
       // Lekcja 5: serwer zapisał wiadomości w bazie – kolejne trafią do tej samej rozmowy.
       const savedId = readConversationId(message.metadata);
-      if (savedId !== null) conversationIdRef.current = savedId;
+      if (savedId !== null && savedId !== conversationIdRef.current) {
+        conversationIdRef.current = savedId;
+        // Standard: adres pokazuje bieżącą rozmowę (F5 zostaje w tej rozmowie).
+        window.history.replaceState(null, "", conversationPageUrl(savedId));
+      }
       if (isAbort) {
         const target = stopNoteTarget(message, all);
         if (target?.kind === "assistant") setStoppedIds((ids) => [...ids, target.id]);
@@ -167,14 +176,23 @@ export default function Chat() {
 
   setMessagesRef.current = setMessages;
 
-  // Lekcja 5, Warsztat 2: po odświeżeniu strony wczytujemy ostatnią rozmowę z bazy (serwer najpierw sprawdza sesję).
+  // Lekcja 5, Warsztat 2: po otwarciu strony wczytujemy rozmowę z bazy (serwer najpierw sprawdza sesję):
+  // /?c=12 – wybraną (Standard, /history), /?new=1 – żadnej (nowa rozmowa), / – ostatnią.
   useEffect(() => {
     let cancelled = false;
+    const target = conversationFromSearch(window.location.search);
+    if (target.kind === "new") {
+      setHistoryStatus("ready");
+      return;
+    }
     (async () => {
       try {
-        const response = await fetch(LATEST_CONVERSATION_API, { cache: "no-store" });
+        const url = target.kind === "id" ? conversationApiUrl(target.id) : LATEST_CONVERSATION_API;
+        const response = await fetch(url, { cache: "no-store" });
         if (cancelled) return;
         if (!response.ok) {
+          // Nie ma takiej rozmowy / błąd: zaczynamy nową, adres nie wskazuje już starej rozmowy.
+          if (target.kind === "id") window.history.replaceState(null, "", NEW_CONVERSATION_URL);
           setHistoryStatus(response.status === 401 ? "ready" : "error");
           return;
         }
@@ -186,6 +204,7 @@ export default function Chat() {
         }
         conversationIdRef.current = data.conversationId;
         if (data.messages.length > 0) setMessages(data.messages);
+        if (data.conversationId !== null) window.history.replaceState(null, "", conversationPageUrl(data.conversationId));
         setHistoryStatus("ready");
       } catch {
         if (!cancelled) setHistoryStatus("error");
@@ -342,6 +361,8 @@ export default function Chat() {
     setInput("");
     if (error) clearError();
     setHistoryStatus("ready");
+    // Standard: F5 po „Nowa rozmowa” nie przywraca poprzedniej rozmowy.
+    window.history.replaceState(null, "", NEW_CONVERSATION_URL);
   }
 
   // Wyjście: serwer usuwa cookie z sesją, a strona wraca do ekranu hasła.
@@ -358,6 +379,10 @@ export default function Chat() {
         <button type="button" className="logout" disabled={isLocked} onClick={handleNewConversation}>
           Nowa rozmowa
         </button>
+        {/* Lekcja 5, Warsztat 2 (Standard): lista zapisanych rozmów */}
+        <Link href={HISTORY_PAGE} className="logout">
+          Historia
+        </Link>
         {/* Lekcja 4, Warsztat 3: link do Dashboardu podróży */}
         <Link href="/dashboard" className="logout">
           Dashboard podróży
