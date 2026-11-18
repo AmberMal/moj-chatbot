@@ -1,7 +1,16 @@
 "use client";
 
 import { useState, type FormEvent } from "react";
-import { PROFILE_API, preferenceLabel, readProfileResponse, type ProfileView } from "@/lib/amber-chat-client";
+import {
+  KEY_PREFERENCES,
+  KEY_PREFERENCE_EMPTY,
+  PROFILE_API,
+  preferenceLabel,
+  readProfileResponse,
+  type ProfileView,
+} from "@/lib/amber-chat-client";
+
+const KEY_NAMES: readonly string[] = KEY_PREFERENCES.map((item) => item.key);
 
 // Lekcja 5, Warsztat 3 (Standard): edycja profilu na /profile.
 // Wszystkie zmiany idą przez /api/profile (serwer sprawdza sesję i te same zasady co narzędzie zapiszProfil:
@@ -67,7 +76,7 @@ export default function ProfileEditor({ initial }: { initial: ProfileView }) {
     }
   }
 
-  const keys = Object.keys(profile.preferences);
+  const keys = Object.keys(profile.preferences).filter((key) => !KEY_NAMES.includes(key));
   return (
     <div className="profile-editor">
       {message && (
@@ -89,9 +98,55 @@ export default function ProfileEditor({ initial }: { initial: ProfileView }) {
         </form>
       </section>
 
+      {/* Dla szybkich: trzy pozycje ważne dla Amber Security – zawsze widoczne, także puste */}
       <section className="profile-card">
-        <h2>Preferencje</h2>
-        {keys.length === 0 && <p className="hint">Brak zapisanych preferencji.</p>}
+        <h2>Najważniejsze dla Amber</h2>
+        <p className="profile-note">Amber dopyta o brakujące pozycje, gdy rozmowa będzie ich dotyczyć, i będzie z nich korzystać w odpowiedziach.</p>
+        {KEY_PREFERENCES.map((item) => {
+          const saved = profile.preferences[item.key];
+          const current = values[item.key] ?? "";
+          return (
+            <div key={item.key} className="profile-row">
+              <label className="profile-label" htmlFor={`pref-${item.key}`}>
+                {item.label}
+              </label>
+              {"options" in item ? (
+                <select
+                  id={`pref-${item.key}`}
+                  value={current}
+                  onChange={(e) => setValues((all) => ({ ...all, [item.key]: e.target.value }))}
+                >
+                  <option value="">{KEY_PREFERENCE_EMPTY}</option>
+                  {item.options.map((option) => (
+                    <option key={option} value={option}>
+                      {option}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <input
+                  id={`pref-${item.key}`}
+                  type="text"
+                  value={current}
+                  maxLength={200}
+                  placeholder={`${KEY_PREFERENCE_EMPTY} (${item.hint})`}
+                  onChange={(e) => setValues((all) => ({ ...all, [item.key]: e.target.value }))}
+                />
+              )}
+              <button type="button" className="logout" disabled={busy || !current.trim() || current === saved} onClick={() => savePreference(item.key)}>
+                Zapisz
+              </button>
+              <button type="button" className="history-delete" disabled={busy || !saved} onClick={() => void send("DELETE", { pozycja: item.key }, `Usunięto: ${item.label}.`)}>
+                Usuń
+              </button>
+            </div>
+          );
+        })}
+      </section>
+
+      <section className="profile-card">
+        <h2>Inne preferencje</h2>
+        {keys.length === 0 && <p className="hint">Brak innych zapisanych preferencji.</p>}
         {keys.map((key) => (
           <div key={key} className="profile-row">
             <label className="profile-label" htmlFor={`pref-${key}`}>
@@ -122,7 +177,7 @@ export default function ProfileEditor({ initial }: { initial: ProfileView }) {
       </section>
 
       <div className="profile-clear">
-        <button type="button" className="history-delete" disabled={busy || (!profile.name && keys.length === 0)} onClick={clearAll}>
+        <button type="button" className="history-delete" disabled={busy || (!profile.name && Object.keys(profile.preferences).length === 0)} onClick={clearAll}>
           Wyczyść profil
         </button>
       </div>

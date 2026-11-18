@@ -10,6 +10,10 @@ import { SESSION_COOKIE, createSessionToken, isSessionValid, readCookie } from "
 import { AMBER_ANALYZE_INSTRUCTIONS, AMBER_CHAT_INSTRUCTIONS } from "../lib/amber-instructions.ts";
 import { generateAmberOutput } from "../lib/amber-output.ts";
 import {
+  CONTACT_OPTIONS,
+  KEY_PREFERENCE_NAMES,
+  keyPreferenceRules,
+  normalizeContact,
   MAX_PREFS_TOTAL,
   NO_NAME_NOTE,
   PROFILE_MESSAGES,
@@ -24,7 +28,7 @@ import {
   profileInstructions,
   readPreferences,
 } from "../lib/amber-profile.ts";
-import { PROFILE_API, PROFILE_PAGE, preferenceLabel, prepareAgentMessages, readProfileResponse } from "../lib/amber-chat-client.ts";
+import { KEY_PREFERENCES, KEY_PREFERENCE_EMPTY, PROFILE_API, PROFILE_PAGE, preferenceLabel, prepareAgentMessages, readProfileResponse } from "../lib/amber-chat-client.ts";
 import {
   AGENT_TOOL_PART_TYPES,
   HISTORY_TOOL_NAMES,
@@ -91,6 +95,10 @@ console.log("\n=== 1. Kontrola danych profilu (serwer, niezależnie od modelu) =
     check(`Zakazana nazwa „${key}” → odrzucona`, !checkProfileInput({ preferencje: { [key]: "abc" } }).ok);
   }
   check("„opinia” (zawiera „pin”) → dozwolona (sprawdzane człony, nie fragmenty)", !isForbiddenKey("opinia") && checkProfileInput({ preferencje: { opinia: "zadowolona" } }).ok);
+  check("„preferowany_kontakt” (zaczyna się od „konta”) → dozwolona", !isForbiddenKey("preferowany_kontakt"));
+  for (const key of ["numer_konta", "konto", "lekarstwa", "kod_pin", "api", "numer_karty_kredytowej"]) {
+    check(`Zakazana nazwa „${key}” (po poprawce) → odrzucona`, isForbiddenKey(key));
+  }
   for (const [name, value] of [
     ["numer karty", "4111 1111 1111 1111"],
     ["IBAN", "GB29NWBK60161331926819"],
@@ -399,6 +407,66 @@ console.log("\n=== 10. Standard: czat i strona /profile (kod źródłowy) ===");
   check("Endpoint /api/profile: GET, PATCH, DELETE i sesja", route.includes("export async function GET") && route.includes("export async function PATCH") &&
     route.includes("export async function DELETE") && route.includes("isSessionValid"));
   check("Przeglądarka nie importuje Supabase", !editor.includes("@supabase") && !editor.includes("amber-profile") && !ui.includes("amber-profile"));
+}
+
+console.log("\n=== 11. Dla szybkich: preferencje ważne dla Amber Security ===");
+{
+  check("Trzy kluczowe pozycje (te same w serwerze i na /profile)", JSON.stringify(KEY_PREFERENCE_NAMES) === JSON.stringify(["rodzaj_obiektu", "system_alarmowy", "preferowany_kontakt"]) &&
+    JSON.stringify(KEY_PREFERENCES.map((p) => p.key)) === JSON.stringify(KEY_PREFERENCE_NAMES));
+  check("Opcje kontaktu takie same w serwerze i na /profile", JSON.stringify(KEY_PREFERENCES[2].options) === JSON.stringify(CONTACT_OPTIONS));
+  for (const [raw, expected] of [["WhatsApp", "WhatsApp"], ["whatsapp", "WhatsApp"], ["Telefon", "telefon"], ["tel", "telefon"], ["email", "e-mail"], ["Mail", "e-mail"], ["gołąb pocztowy", null], ["SMS", null]]) {
+    check(`Kontakt „${raw}” → ${expected ?? "odrzucony"}`, normalizeContact(raw) === expected);
+  }
+  const okContact = checkProfileInput({ preferencje: { preferowany_kontakt: "whatsapp" } });
+  check("Zapis kontaktu → jedna nazwa (WhatsApp)", okContact.ok && okContact.value.preferencje.preferowany_kontakt === "WhatsApp");
+  check("Nieznana droga kontaktu → odrzucona z podpowiedzią", !checkProfileInput({ preferencje: { preferowany_kontakt: "SMS" } }).ok &&
+    checkProfileInput({ preferencje: { preferowany_kontakt: "SMS" } }).komunikat.includes("telefon, e-mail albo WhatsApp"));
+  check("Rodzaj obiektu i system – zwykły tekst", checkProfileInput({ preferencje: { rodzaj_obiektu: "dom", system_alarmowy: "Ajax" } }).ok);
+
+  const none = keyPreferenceRules({ name: null, preferences: {} });
+  check("Pusty profil → „Brakuje: rodzaj_obiektu, system_alarmowy, preferowany_kontakt”", none.includes("Brakuje w profilu: rodzaj_obiektu, system_alarmowy, preferowany_kontakt."));
+  const part = keyPreferenceRules({ name: "Ola", preferences: { rodzaj_obiektu: "dom" } });
+  check("Częściowy profil → brakują tylko 2 pozycje", part.includes("Brakuje w profilu: system_alarmowy, preferowany_kontakt.") && !part.includes("Brakuje w profilu: rodzaj_obiektu"));
+  const all = keyPreferenceRules({ name: "Ola", preferences: { rodzaj_obiektu: "dom", system_alarmowy: "Ajax", preferowany_kontakt: "WhatsApp" } });
+  check("Pełny profil → bez dopytywania („Wszystkie kluczowe pozycje są zapisane”)", all.includes("Wszystkie kluczowe pozycje są zapisane") && !all.includes("Brakuje w profilu"));
+  check("Zasada: dopytuje tylko przy wycenie/montażu/serwisie/kontakcie, najwyżej JEDNO pytanie, bez powtarzania",
+    none.includes("wycenę, montaż, serwis lub kontakt") && none.includes("najwyżej JEDNO") && none.includes("Przy pytaniach niezwiązanych nie dopytuj") && none.includes("nie powtarzaj"));
+  check("Zasada: zapis narzędziem zapiszProfil pod stałymi nazwami", none.includes("zapiszProfil") && none.includes("rodzaj_obiektu, system_alarmowy albo preferowany_kontakt"));
+  check("Zasada: używa bez proszenia o powtórzenie; ceny i kontakty tylko z instrukcji firmy",
+    none.includes("bez proszenia klienta o ich powtórzenie") && none.includes("wyłącznie z instrukcji firmy"));
+  check("Zasady dołączone do instrukcji zawsze (także przy pustym profilu)",
+    profileInstructions({ name: null, preferences: {} }).includes("Najważniejsze informacje o kliencie") &&
+    profileInstructions({ name: "Ola", preferences: { miasto: "Toruń" } }).includes("Najważniejsze informacje o kliencie"));
+  const block = profileInstructions({ name: "Ola", preferences: { rodzaj_obiektu: "dom", preferowany_kontakt: "WhatsApp" } });
+  check("Wartości preferencji tylko w znaczniku danych (JSON)", block.includes('"rodzaj_obiektu":"dom"') && block.indexOf('"rodzaj_obiektu":"dom"') < block.indexOf("</profil_klienta>"));
+  check("Opis narzędzia zna nazwy pozycji firmy", PROFILE_TOOL_DESCRIPTION.includes("rodzaj_obiektu") && PROFILE_TOOL_DESCRIPTION.includes("preferowany_kontakt (telefon, e-mail albo WhatsApp)"));
+}
+{
+  // Agent: przed zapisem instrukcje mówią „brakuje”, po zapisie – wartości w profilu (ta sama wiadomość → inne instrukcje).
+  const db = fakeDb();
+  const store = createProfileStore(db.api);
+  const before = chatModel([[...textChunks("Proszę zgłosić serwis. Jaki mają Państwo system alarmowy?"), stop]]);
+  await readChat(await handler({ model: before, profileStore: store }).handle(request({ mode: "chat", messages: [user("u1", "Jak mogę zgłosić serwis alarmu?")] })));
+  const t = createProfileTool(store);
+  await runTool(t, { preferencje: { rodzaj_obiektu: "dom", system_alarmowy: "Ajax", preferowany_kontakt: "whatsapp" } });
+  const after = chatModel([[...textChunks("Serwis Ajax – najlepiej przez WhatsApp."), stop]]);
+  await readChat(await handler({ model: after, profileStore: store }).handle(request({ mode: "chat", messages: [user("u1", "Jak mogę zgłosić serwis alarmu?")] })));
+  const s1 = systemText(before.doStreamCalls[0]);
+  const s2 = systemText(after.doStreamCalls[0]);
+  check("Przed zapisem: model wie, czego brakuje", s1.includes("Brakuje w profilu: rodzaj_obiektu, system_alarmowy, preferowany_kontakt."));
+  check("Po zapisie: model dostaje dom / Ajax / WhatsApp i nie ma czego dopytywać", s2.includes('"system_alarmowy":"Ajax"') && s2.includes('"preferowany_kontakt":"WhatsApp"') && s2.includes("Wszystkie kluczowe pozycje są zapisane"));
+  check("To samo pytanie → inne instrukcje przed i po zapisie", s1 !== s2);
+  check("Zapis w jednym wierszu, kontakt znormalizowany", db.rows.length === 1 && db.rows[0].preferences.preferowany_kontakt === "WhatsApp");
+}
+{
+  const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
+  const editor = read("app/profile/profile-editor.tsx");
+  const instr = read("lib/amber-instructions.ts");
+  check("/profile: sekcja „Najważniejsze dla Amber” z trzema pozycjami (zawsze widoczne)", editor.includes("Najważniejsze dla Amber") && editor.includes("KEY_PREFERENCES.map("));
+  check("/profile: preferowany kontakt z listy (select)", editor.includes("<select") && editor.includes("item.options.map("));
+  check("/profile: puste pozycje opisane („brak – Amber zapyta…”)", editor.includes("KEY_PREFERENCE_EMPTY") && KEY_PREFERENCE_EMPTY.startsWith("brak – Amber zapyta"));
+  check("/profile: inne preferencje osobno (bez dublowania kluczowych)", editor.includes("Inne preferencje") && editor.includes("!KEY_NAMES.includes(key)"));
+  check("Główne instrukcje Amber bez zmian (zasada „Państwo”)", instr.includes("Zwracaj się do klienta w formie „Państwo”") && !instr.includes("rodzaj_obiektu"));
 }
 
 console.log(`\nWynik: ${passed} zaliczonych, ${failed} niezaliczonych.`);

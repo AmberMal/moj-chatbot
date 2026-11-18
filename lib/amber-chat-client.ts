@@ -100,6 +100,15 @@ export function readProfileResponse(data: unknown): { profile: ProfileView; gree
   return { profile: { name, preferences: prefs }, greeting };
 }
 
+// Lekcja 5, Warsztat 3 (Dla szybkich): najważniejsze pozycje profilu dla Amber Security (strona /profile).
+// Te same nazwy i opcje są w lib/amber-profile.ts (KEY_PREFERENCE_NAMES, CONTACT_OPTIONS – sprawdza to test).
+export const KEY_PREFERENCES = [
+  { key: "rodzaj_obiektu", label: "Rodzaj obiektu", hint: "np. dom, mieszkanie, biuro, sklep" },
+  { key: "system_alarmowy", label: "System alarmowy", hint: "np. Ajax, Texecom, Pyronix, brak" },
+  { key: "preferowany_kontakt", label: "Preferowany kontakt", options: ["telefon", "e-mail", "WhatsApp"] },
+] as const;
+export const KEY_PREFERENCE_EMPTY = "brak – Amber zapyta, gdy będzie potrzebne";
+
 // Nazwa pozycji do wyświetlenia: „styl_odpowiedzi” → „Styl odpowiedzi”.
 export function preferenceLabel(key: string): string {
   const text = key.replace(/_/g, " ");

@@ -19,6 +19,20 @@ export const MAX_PREFS_PER_SAVE = 10;
 export const MAX_PREFS_TOTAL = 30;
 
 export type Profile = { name: string | null; preferences: Record<string, string> };
+
+// Lekcja 5, Warsztat 3 (Dla szybkich): trzy preferencje ważne dla Amber Security.
+// Te same nazwy są w lib/amber-chat-client.ts (KEY_PREFERENCES – strona /profile; sprawdza to test).
+export const KEY_PREFERENCE_NAMES = ["rodzaj_obiektu", "system_alarmowy", "preferowany_kontakt"] as const;
+export const CONTACT_OPTIONS = ["telefon", "e-mail", "WhatsApp"] as const;
+
+// Preferowany kontakt: tylko jedna z trzech dróg (różne zapisy → jedna nazwa).
+export function normalizeContact(value: string): (typeof CONTACT_OPTIONS)[number] | null {
+  const v = value.trim().toLowerCase().replace(/\s+/g, "");
+  if (["telefon", "tel", "telefonicznie", "phone", "telefoniczny"].includes(v)) return "telefon";
+  if (["e-mail", "email", "mail", "mailowo", "e-mailowo"].includes(v)) return "e-mail";
+  if (["whatsapp", "whats-app", "wa"].includes(v)) return "WhatsApp";
+  return null;
+}
 export type ProfileRow = { id: number; name: string | null; preferences: unknown };
 
 export type ProfileDb = {
@@ -34,11 +48,14 @@ export type ProfileDb = {
 // ---------------------------------------------------------------------------
 
 // Nazwy pozycji, których nigdy nie zapisujemy (hasła, klucze, dane finansowe i dokumenty, zdrowie).
-const FORBIDDEN_KEY_PARTS = [
-  "haslo", "hasło", "password", "pass", "pin", "klucz", "key", "token", "secret", "sekret", "api",
-  "karta", "karty", "card", "konto", "konta", "iban", "bank", "pesel", "nip", "dowod", "dowód", "paszport", "passport",
-  "zdrow", "chorob", "lek", "diagnoz", "health",
+// Rdzenie – człon nazwy zaczyna się od nich (np. haslo_wifi, zdrowie, numer_karty).
+const FORBIDDEN_KEY_STEMS = [
+  "haslo", "hasło", "password", "klucz", "token", "secret", "sekret",
+  "karta", "karty", "kartę", "iban", "bank", "pesel", "dowod", "dowód", "paszport", "passport",
+  "zdrow", "chorob", "lekarst", "diagnoz", "health",
 ];
+// Krótkie słowa – tylko cały człon (np. „konta”, ale nie „kontakt”; „pin”, ale nie „opinia”).
+const FORBIDDEN_KEY_WORDS = ["pin", "pass", "key", "api", "card", "konto", "konta", "kont", "nip", "lek", "leki"];
 // Wartości wyglądające na sekrety: numery kart/kont (13+ cyfr), IBAN, klucze API, długie tokeny.
 const SECRET_VALUE_PATTERNS = [
   /(?:\d[ -]?){13,}/,
@@ -50,10 +67,12 @@ const SECRET_VALUE_PATTERNS = [
   /\b(hasło|haslo|password|passwd)\b/i,
 ];
 
-// Zakazana nazwa: któryś człon (oddzielony „_”) zaczyna się od zakazanego słowa – np. haslo_wifi, numer_karty, leki.
-// Człony, nie dowolny fragment: „opinia” zawiera „pin”, ale nie jest zakazana.
+// Zakazana nazwa: któryś człon (oddzielony „_”) zaczyna się od zakazanego rdzenia albo jest zakazanym krótkim słowem.
+// Człony, nie dowolny fragment: „opinia” zawiera „pin”, a „kontakt” zaczyna się od „konta” – obie są dozwolone.
 export function isForbiddenKey(key: string): boolean {
-  return key.split("_").some((segment) => FORBIDDEN_KEY_PARTS.some((part) => segment.startsWith(part)));
+  return key
+    .split("_")
+    .some((segment) => FORBIDDEN_KEY_WORDS.includes(segment) || FORBIDDEN_KEY_STEMS.some((stem) => segment.startsWith(stem)));
 }
 
 const NAME_PATTERN = /^[\p{L}][\p{L}\p{M}'’\- ]{0,59}$/u;
@@ -98,6 +117,12 @@ export function checkProfileInput(input: unknown): ProfileCheck {
       if (!text || text.length > MAX_PREF_VALUE_CHARS) return fail(`Wartość może mieć od 1 do ${MAX_PREF_VALUE_CHARS} znaków.`);
       if (SECRET_VALUE_PATTERNS.some((pattern) => pattern.test(text))) {
         return fail("Nie zapisuję haseł, kluczy, numerów kart ani kont.");
+      }
+      if (key === "preferowany_kontakt") {
+        const contact = normalizeContact(text);
+        if (!contact) return fail("Preferowany kontakt: telefon, e-mail albo WhatsApp.");
+        prefs[key] = contact;
+        continue;
       }
       prefs[key] = text;
     }
@@ -189,9 +214,23 @@ export function greetingText(profile: Profile): string {
 export const NO_NAME_NOTE =
   "Klient nie podał jeszcze imienia. Na początku nowej rozmowy zobaczył powitanie Amber z pytaniem, jak się do niego zwracać – jeśli w odpowiedzi poda imię (np. „Ela”), zapisz je narzędziem zapiszProfil.";
 
+// Dla szybkich: zasady dla trzech kluczowych preferencji – dopytać, gdy brakuje i rozmowa tego dotyczy; zapisać; używać.
+export function keyPreferenceRules(profile: Profile): string {
+  const missing = KEY_PREFERENCE_NAMES.filter((name) => !profile.preferences[name]);
+  return [
+    "## Najważniejsze informacje o kliencie dla Amber Security",
+    `Kluczowe pozycje profilu: ${KEY_PREFERENCE_NAMES.join(", ")} (preferowany_kontakt: telefon, e-mail albo WhatsApp).`,
+    missing.length > 0 ? `Brakuje w profilu: ${missing.join(", ")}.` : "Wszystkie kluczowe pozycje są zapisane w profilu.",
+    "Zasady:",
+    "- Gdy klient pyta o wycenę, montaż, serwis lub kontakt, a do dobrej odpowiedzi brakuje którejś z tych pozycji – na końcu odpowiedzi zadaj najwyżej JEDNO krótkie pytanie o najbardziej potrzebną brakującą pozycję. Przy pytaniach niezwiązanych nie dopytuj. Jeśli klient nie odpowiedział na takie pytanie, nie powtarzaj go w tej rozmowie.",
+    "- Gdy klient poda którąś z tych informacji wprost – zapisz ją narzędziem zapiszProfil dokładnie pod nazwą: rodzaj_obiektu, system_alarmowy albo preferowany_kontakt.",
+    "- Zapisanych informacji używaj w odpowiedziach bez proszenia klienta o ich powtórzenie: dopasuj zalecenia do rodzaju obiektu (zgodnie z zasadami firmy), przy serwisie odnoś się do zapisanego systemu alarmowego, a proponując kontakt – wskaż preferowaną drogę. Dane kontaktowe, ceny i zasady bierz wyłącznie z instrukcji firmy.",
+  ].join("\n");
+}
+
 export function profileInstructions(profile: Profile): string {
   const hasPrefs = Object.keys(profile.preferences).length > 0;
-  if (!profile.name && !hasPrefs) return `## Informacje o kliencie\n${NO_NAME_NOTE}`;
+  if (!profile.name && !hasPrefs) return `## Informacje o kliencie\n${NO_NAME_NOTE}\n\n${keyPreferenceRules(profile)}`;
   // JSON + zamiana „<” i „>” – treść profilu nie może zamknąć znacznika ani udawać nowych instrukcji.
   const data = JSON.stringify({ imie: profile.name, preferencje: profile.preferences })
     .replace(/</g, "\\u003c")
@@ -202,6 +241,8 @@ export function profileInstructions(profile: Profile): string {
     "Korzystaj z nich naturalnie, gdy pasują do rozmowy (np. preferowany styl odpowiedzi). Gdy klient zapyta, co o nim wiesz – wymień te informacje. Formę zwracania się do klienta zostaw bez zmian.",
     `<profil_klienta>${data}</profil_klienta>`,
     ...(profile.name ? [] : [NO_NAME_NOTE]),
+    "",
+    keyPreferenceRules(profile),
   ].join("\n");
 }
 
@@ -294,6 +335,7 @@ export const PROFILE_TOOL_DESCRIPTION = [
   "NIE zapisuj domysłów, planów, życzeń, przypuszczeń ani żartów („Może kiedyś przeprowadzę się do Gdańska” – nie zapisuj).",
   "NIGDY nie zapisuj haseł, kluczy, kodów, numerów kart i kont, danych dokumentów ani danych wrażliwych (zdrowie, poglądy, wyznanie itp.).",
   "Nazwy preferencji: małe litery i podkreślenia, np. miasto, ulubione_jedzenie, styl_odpowiedzi. Zapisuj tylko nowe lub zmienione fakty – wcześniejsze zostają.",
+  "Ważne dla firmy nazwy: rodzaj_obiektu (np. dom, mieszkanie, biuro, sklep), system_alarmowy (np. Ajax, Texecom, Pyronix, brak), preferowany_kontakt (telefon, e-mail albo WhatsApp).",
   "Po zapisie krótko potwierdź klientowi, co zapamiętałaś.",
 ].join(" ");
 
