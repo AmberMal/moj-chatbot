@@ -410,6 +410,10 @@ export default function Chat() {
         <Link href={PROFILE_PAGE} className="logout">
           Profil
         </Link>
+        {/* Lekcja 6, Warsztat 2: baza wiedzy (wklejanie dokumentów) */}
+        <Link href="/upload" className="logout">
+          Baza wiedzy
+        </Link>
         {/* Lekcja 4, Warsztat 3: link do Dashboardu podróży */}
         <Link href="/dashboard" className="logout">
           Dashboard podróży

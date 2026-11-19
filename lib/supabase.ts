@@ -10,6 +10,8 @@ import {
   type ConversationStore,
 } from "./amber-conversations";
 import { createProfileStore, createSupabaseProfileDb, type ProfileStore } from "./amber-profile";
+import { createKnowledgeStore, createSupabaseKnowledgeDb, type KnowledgeStore } from "./amber-knowledge";
+import { getEmbedder } from "./model";
 
 let cached: SupabaseClient | null = null;
 
@@ -35,4 +37,11 @@ export function getConversationStore(): ConversationStore | null {
 export function getProfileStore(): ProfileStore | null {
   const client = getSupabase();
   return client ? createProfileStore(createSupabaseProfileDb(client)) : null;
+}
+
+// Lekcja 6, Warsztat 2: baza wiedzy – dokumenty, fragmenty i ich embeddingi (lib/amber-knowledge.ts).
+// null = brak konfiguracji Supabase. Brak modelu embeddingów zgłasza sam zapis (komunikat po polsku).
+export function getKnowledgeStore(): KnowledgeStore | null {
+  const client = getSupabase();
+  return client ? createKnowledgeStore(createSupabaseKnowledgeDb(client), getEmbedder()) : null;
 }

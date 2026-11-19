@@ -5,6 +5,7 @@
 // użycie z embed / embedMany z pakietu "ai" (node_modules/ai/docs/03-ai-sdk-core/30-embeddings.mdx).
 
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
+import { embedMany } from "ai";
 
 function getOpenRouter() {
   const apiKey = process.env.OPENROUTER_API_KEY;
@@ -25,4 +26,15 @@ export function getEmbeddingModel() {
   const openrouter = getOpenRouter();
   const modelId = process.env.OPENROUTER_EMBEDDING_MODEL;
   return openrouter && modelId ? openrouter.textEmbeddingModel(modelId) : null;
+}
+
+// Lekcja 6, Warsztat 2 (krok B): embeddingi wielu tekstów JEDNYM wywołaniem (embedMany).
+// null = brak modelu embeddingów w .env.local. Wyniki w tej samej kolejności co teksty.
+export function getEmbedder(): ((values: string[]) => Promise<number[][]>) | null {
+  const model = getEmbeddingModel();
+  if (!model) return null;
+  return async (values) => {
+    const { embeddings } = await embedMany({ model, values });
+    return embeddings;
+  };
 }

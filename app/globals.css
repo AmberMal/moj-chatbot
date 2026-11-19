@@ -508,3 +508,21 @@ h1 { margin: 0; font-size: 26px; }
   color: var(--ink);
 }
 .profile-row select:focus-visible { outline: 2px solid var(--link); outline-offset: 1px; }
+
+/* Lekcja 6, Warsztat 2: strona /upload (baza wiedzy) */
+.upload-form .profile-label { flex: none; }
+.upload-form input,
+.upload-form textarea {
+  width: 100%;
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  font: inherit;
+  background: var(--surface);
+  color: var(--ink);
+}
+.upload-form textarea { resize: vertical; line-height: 1.5; }
+.upload-form input:focus-visible,
+.upload-form textarea:focus-visible { outline: 2px solid var(--link); outline-offset: 1px; }
+.upload-form .hint { margin: 0; text-align: left; }
+.upload-form button { align-self: flex-start; }
