@@ -2,8 +2,9 @@ import { SESSION_COOKIE, getAuthConfig, isSessionValid, readCookie } from "../..
 import { createUploadApi } from "../../../lib/amber-knowledge";
 import { getKnowledgeStore } from "../../../lib/supabase";
 
-// Lekcja 6, Warsztat 2 (Minimum, krok A): zapis dokumentu do bazy wiedzy (documents + chunks, bez embeddingów).
-// Najpierw sesja (bez niej 401), dopiero potem baza. Klucz Supabase zostaje na serwerze.
+// Lekcja 6, Warsztat 2: baza wiedzy – GET lista dokumentów, POST import z postępem (fragmenty + embeddingi),
+// DELETE usunięcie dokumentu. Zawsze najpierw sesja (bez niej 401), dopiero potem baza i model.
+// Klucze Supabase i OpenRouter zostają na serwerze.
 export const dynamic = "force-dynamic";
 
 const api = createUploadApi({
@@ -16,6 +17,12 @@ const api = createUploadApi({
   getStore: getKnowledgeStore,
 });
 
+export async function GET(req: Request) {
+  return api.GET(req);
+}
 export async function POST(req: Request) {
   return api.POST(req);
+}
+export async function DELETE(req: Request) {
+  return api.DELETE(req);
 }

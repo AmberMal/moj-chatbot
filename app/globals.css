@@ -526,3 +526,21 @@ h1 { margin: 0; font-size: 26px; }
 .upload-form textarea:focus-visible { outline: 2px solid var(--link); outline-offset: 1px; }
 .upload-form .hint { margin: 0; text-align: left; }
 .upload-form button { align-self: flex-start; }
+/* Lekcja 6, Warsztat 2 (Standard): postęp importu i lista dokumentów */
+.upload-form .error p,
+.upload-form .profile-ok p,
+.upload-progress p { margin: 0; }
+.upload-form .error,
+.upload-form .profile-ok { display: flex; flex-direction: column; gap: 6px; }
+.upload-progress { padding: 10px 14px; border-radius: 10px; background: var(--accent-soft); color: var(--ink); }
+.upload-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.upload-list li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.upload-doc { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.upload-empty { margin: 0; text-align: left; }
