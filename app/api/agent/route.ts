@@ -26,7 +26,7 @@ import {
   signAgentChatTurn,
 } from "../../../lib/amber-history";
 import { createAgentHandler } from "../../../lib/amber-agent";
-import { getConversationStore, getProfileStore } from "../../../lib/supabase";
+import { getConversationStore, getProfileStore, getSearchKnowledgeTool } from "../../../lib/supabase";
 import { createProfileTool, profileInstructions } from "../../../lib/amber-profile";
 
 // Warsztat 3: jeden endpoint, dwa tryby (mode=chat, mode=analyze). Logika: lib/amber-agent.ts.
@@ -89,6 +89,9 @@ export async function POST(req: Request) {
       // Lekcja 5, Warsztat 3: zapis faktów o kliencie w user_profiles (tylko gdy Supabase jest skonfigurowany).
       const profileStore = getProfileStore();
       if (profileStore) tools.zapiszProfil = createProfileTool(profileStore);
+      // Lekcja 6, Warsztat 3: wyszukiwanie w bazie wiedzy (embedding pytania + match_chunks w Supabase).
+      const searchKnowledgeTool = getSearchKnowledgeTool();
+      if (searchKnowledgeTool) tools.searchKnowledge = searchKnowledgeTool;
       if (DEV_DIAGNOSTICS) {
         // Tylko przy npm run dev. Zwraca „konfiguracja kompletna: tak/nie” – bez nazw zmiennych i wartości.
         tools.diagnostyka = createDiagnosticsTool({ env: process.env });

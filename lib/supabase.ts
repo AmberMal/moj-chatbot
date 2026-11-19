@@ -12,6 +12,7 @@ import {
 import { createProfileStore, createSupabaseProfileDb, type ProfileStore } from "./amber-profile";
 import { createKnowledgeStore, createSupabaseKnowledgeDb, type KnowledgeStore } from "./amber-knowledge";
 import { getEmbedder } from "./model";
+import { createSearchKnowledgeTool, createSupabaseMatchChunks } from "./amber-knowledge-search";
 
 let cached: SupabaseClient | null = null;
 
@@ -44,4 +45,11 @@ export function getProfileStore(): ProfileStore | null {
 export function getKnowledgeStore(): KnowledgeStore | null {
   const client = getSupabase();
   return client ? createKnowledgeStore(createSupabaseKnowledgeDb(client), getEmbedder()) : null;
+}
+
+// Lekcja 6, Warsztat 3: narzędzie agenta searchKnowledge. null = brak Supabase albo modelu embeddingów.
+export function getSearchKnowledgeTool() {
+  const client = getSupabase();
+  const embed = getEmbedder();
+  return client && embed ? createSearchKnowledgeTool({ embed, matchChunks: createSupabaseMatchChunks(client) }) : null;
 }

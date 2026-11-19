@@ -870,7 +870,8 @@ check("Instrukcja: link z Wikipedii pod odpowiedzią, nie w treści", /Link do a
 check("Ogólny zakaz wpisywania adresów stron bez zmian", AMBER_CHAT_INSTRUCTIONS.includes("Nie wpisuj adresów stron do odpowiedzi – źródła pokazuje aplikacja pod odpowiedzią."));
 check("Sekcja NARZĘDZIA POMOCNICZE w trybie czatu", AMBER_CHAT_INSTRUCTIONS.includes("NARZĘDZIA POMOCNICZE:"));
 check("Brak tej sekcji w trybie analizy", !AMBER_ANALYZE_INSTRUCTIONS.includes("NARZĘDZIA POMOCNICZE:"));
-check("Ceny/usługi/zasady wyłącznie z bazy wiedzy", /cenach, usługach, terminach, rabatach i zasadach .* wyłącznie z tej instrukcji/.test(AMBER_CHAT_INSTRUCTIONS));
+// Lekcja 6, Warsztat 3: w czacie baza wiedzy to dokumenty w Supabase (narzędzie searchKnowledge), nie treść instrukcji.
+check("Ceny/usługi/zasady wyłącznie z bazy wiedzy", /cenach, usługach, terminach, rabatach i zasadach .* wyłącznie z bazy wiedzy \(narzędzie searchKnowledge\)/.test(AMBER_CHAT_INSTRUCTIONS));
 check("Produkcja: instrukcja czatu bez słowa „diagnostyk”", !/diagnostyk/i.test(AMBER_CHAT_INSTRUCTIONS));
 check("Wersja testowa: instrukcja o diagnostyce – tylko „konfiguracja kompletna: tak/nie”", /Przekaż wyłącznie informację „konfiguracja kompletna: tak\/nie”/.test(AMBER_CHAT_INSTRUCTIONS_DEV) && AMBER_CHAT_INSTRUCTIONS_DEV.includes("DIAGNOSTYKA (ŚRODOWISKO TESTOWE):") && AMBER_CHAT_INSTRUCTIONS_DEV.startsWith(AMBER_CHAT_INSTRUCTIONS) && !/OPENROUTER|SESSION_SECRET|CHAT_PASSWORD/.test(AMBER_CHAT_INSTRUCTIONS_DEV));
 check("Instrukcja: co zrobić, gdy narzędzie pominięto z powodu limitu", /pominięte z powodu limitu narzędzi/.test(AMBER_CHAT_INSTRUCTIONS));
@@ -881,7 +882,8 @@ check("Instrukcja: co zrobić, gdy narzędzie pominięto z powodu limitu", /pomi
 }
 check("Notatki opisane jako tymczasowe", /Notatki są tymczasowe/.test(AMBER_CHAT_INSTRUCTIONS) && /Nigdy nie przedstawiaj ich jako trwałej pamięci/.test(AMBER_CHAT_INSTRUCTIONS));
 check("DATA I GODZINA: narzędzie czas (domyślnie Londyn)", /Masz narzędzie czas .*Europe\/London/.test(AMBER_CHAT_INSTRUCTIONS) && !AMBER_CHAT_INSTRUCTIONS.includes("aktualnyCzas"));
-check("Ceny w bazie wiedzy bez zmian (£666 + VAT)", AMBER_CHAT_INSTRUCTIONS.includes("£666"));
+// Lekcja 6: ceny są w dokumentach bazy wiedzy (czat) i nadal w instrukcji trybu analizy (bez narzędzi).
+check("Ceny w bazie wiedzy bez zmian (£666 + VAT)", AMBER_ANALYZE_INSTRUCTIONS.includes("£666") && !AMBER_CHAT_INSTRUCTIONS.includes("£666"));
 
 // ---------------------------------------------------------------------------
 console.log("\n=== 14. przestepczosc (Warsztat 1, Fast): data.police.uk + postcodes.io ===");
