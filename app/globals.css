@@ -544,3 +544,8 @@ h1 { margin: 0; font-size: 26px; }
 }
 .upload-doc { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .upload-empty { margin: 0; text-align: left; }
+/* Lekcja 6, Warsztat 2 (Dla szybkich): wybór sposobu dzielenia tekstu */
+.upload-mode { display: flex; flex-wrap: wrap; gap: 6px 18px; margin: 0; padding: 0; border: 0; }
+.upload-mode legend { padding: 0; margin-bottom: 6px; }
+.upload-mode label { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
+.upload-form .upload-mode input { width: auto; padding: 0; }

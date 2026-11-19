@@ -5,6 +5,8 @@
 import { readFileSync } from "node:fs";
 import {
   EMBEDDING_DIMENSIONS,
+  FIXED_CHUNK_CHARS,
+  FIXED_CHUNK_OVERLAP,
   KNOWLEDGE_MESSAGES,
   KnowledgeError,
   MAX_CHUNK_CHARS,
@@ -20,6 +22,8 @@ import {
   replaceQuestion,
   savedMessage,
   splitIntoChunks,
+  splitIntoFixedChunks,
+  splitText,
   stageErrorMessage,
 } from "../lib/amber-knowledge.ts";
 
@@ -73,6 +77,24 @@ const giant = "słowo ".repeat(300).trim(); // jedno „zdanie” bez kropki > 8
 const giantChunks = splitIntoChunks(giant);
 check("zdanie > 800: tnie na słowach", giantChunks.length >= 2 && giantChunks.every((c) => c.length <= MAX_CHUNK_CHARS));
 check("zdanie > 800: nie tnie słowa", giantChunks.every((c) => c.split(" ").every((w) => w === "słowo")));
+
+// --- Dla szybkich: „stałe kawałki” po 300 znaków z zakładką 50 ---
+// tekst testowy: punkty regulaminu (bez zależności od plików w baza-wiedzy/)
+const regulamin = Array.from({ length: 9 }, (_, i) => `${i + 1}. Punkt regulaminu numer ${i + 1} opisuje jedną zasadę umowy serwisowej i ma kilka zdań. Klient zostaje o niej poinformowany e-mailem.`).join("\n\n");
+const fixed = splitIntoFixedChunks(regulamin);
+check("kawałki: każdy ≤ 300", fixed.every((c) => c.length <= FIXED_CHUNK_CHARS));
+check("kawałki: kilka kawałków", fixed.length >= Math.floor(regulamin.trim().length / (FIXED_CHUNK_CHARS - FIXED_CHUNK_OVERLAP)));
+const plain = "abcdefghij".repeat(100); // 1000 znaków bez spacji
+const plainChunks = splitIntoFixedChunks(plain);
+check("kawałki: start co 250 znaków", plainChunks.length === 4 && plainChunks[1] === plain.slice(250, 550) && plainChunks[3] === plain.slice(750));
+check("kawałki: zakładka 50 znaków", plainChunks[0].slice(-FIXED_CHUNK_OVERLAP) === plainChunks[1].slice(0, FIXED_CHUNK_OVERLAP));
+check("kawałki: nic nie zginęło", plainChunks[0] + plainChunks.slice(1).map((c) => c.slice(FIXED_CHUNK_OVERLAP)).join("") === plain);
+check("kawałki: krótki tekst = 1", splitIntoFixedChunks("Krótki tekst.").length === 1);
+check("kawałki: dokładnie 300 = 1", splitIntoFixedChunks("a".repeat(300)).length === 1);
+check("kawałki: 301 = 2", splitIntoFixedChunks("a".repeat(301)).length === 2);
+check("kawałki: pusty = 0", splitIntoFixedChunks("   ").length === 0);
+check("splitText: domyślnie akapity", splitText(regulamin, "akapity").length === splitIntoChunks(regulamin).length);
+check("splitText: kawałki", splitText(regulamin, "kawalki").length === fixed.length);
 
 // --- sprawdzanie formularza ---
 check("pusty tytuł", checkUploadInput({ tytul: "  ", tresc: "x" }).komunikat === KNOWLEDGE_MESSAGES.emptyTitle);
@@ -214,6 +236,12 @@ const e6 = await failing(repStore, "Cennik 2026", "nowa treść");
 check("ten sam tytuł bez potwierdzenia: exists", e6 instanceof KnowledgeError && e6.kind === "exists");
 check("ten sam tytuł bez potwierdzenia: nic nie zmienione", repDb.state.docs.length === 2 && repDb.state.chunks.length === 7);
 const cennik540 = cennik.join("\n\n").replace("490 zł", "540 zł");
+const modeDb = fakeDb();
+const modeStore = createKnowledgeStore(modeDb, fakeEmbed());
+const savedKaw = await modeStore.saveDocument("Regulamin (kawałki)", regulamin, { mode: "kawalki" });
+check("zapis kawałkami: liczba", savedKaw.count === fixed.length && modeDb.state.chunks.every((c, i) => c.content === fixed[i]));
+const savedAkap = await modeStore.saveDocument("Regulamin", regulamin);
+check("zapis bez wyboru: akapity", savedAkap.count === splitIntoChunks(regulamin).length);
 const rep = await repStore.saveDocument("Cennik 2026", cennik540, { replace: true });
 const list2 = await repStore.listDocuments();
 check("zastąpienie: nadal jeden cennik", list2.filter((d) => d.title === "Cennik 2026").length === 1 && list2.length === 2);
@@ -285,6 +313,12 @@ check("POST: strumień ndjson, no-store", r200.status === 200 && r200.headers.ge
 const ev = await readEvents(r200);
 check("POST: etapy po kolei", ev.slice(0, 3).map((e) => e.etap).join(",") === "split,embed,save" && ev.slice(0, 3).every((e) => e.typ === "etap"));
 check("POST: gotowe z komunikatem", ev.at(-1).typ === "gotowe" && ev.at(-1).komunikat === "Zapisano dokument „Cennik 2026”: 5 fragmentów" && ev.at(-1).fragmenty === 5);
+const modeApiDb = fakeDb();
+const modeApi = createUploadApi({ getSession: () => ({}), getStore: () => createKnowledgeStore(modeApiDb, fakeEmbed()) });
+const evKaw = await readEvents(await modeApi.POST(req("POST", { tytul: "Regulamin (kawałki)", tresc: regulamin, podzial: "kawalki" })));
+check("POST podzial=kawalki", evKaw.at(-1).fragmenty === fixed.length);
+const evDef = await readEvents(await modeApi.POST(req("POST", { tytul: "R2", tresc: regulamin, podzial: "coś innego" })));
+check("POST nieznany podział: akapity", evDef.at(-1).fragmenty === splitIntoChunks(regulamin).length);
 const rList = await api.GET(req("GET"));
 const bList = await rList.json();
 check("GET: lista", rList.status === 200 && bList.dokumenty.length === 1 && bList.dokumenty[0].chunks === 5);
@@ -341,6 +375,7 @@ check("formularz: pola i przycisk", />\s*Tytuł\s*</.test(form) && />\s*Treść\
 check("formularz: nie importuje supabase", !form.includes("supabase"));
 check("formularz: przycisk zablokowany w trakcie", form.includes("disabled={busy}") && form.includes("if (busy) return"));
 check("formularz: potwierdzenia", form.includes("replaceQuestion(") && form.includes("deleteQuestion(") && form.includes("window.confirm"));
+check("formularz: wybór podziału, domyślnie akapity", form.includes('useState<SplitMode>("akapity")') && form.includes("podzial: mode") && form.includes("SPLIT_MODES"));
 check("formularz: lista i Usuń", form.includes("Dokumenty w bazie wiedzy") && form.includes("Usuń") && form.includes("formatAddedAt("));
 const knowledge = readFileSync("lib/amber-knowledge.ts", "utf8");
 check("lib: tylko typ z supabase-js", knowledge.includes('import type { SupabaseClient }') && !knowledge.includes("process.env"));

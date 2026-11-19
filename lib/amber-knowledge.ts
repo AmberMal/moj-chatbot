@@ -1,6 +1,7 @@
 // Lekcja 6, Warsztat 2 (Minimum): baza wiedzy – zapis dokumentu, podział na fragmenty (krok A)
 // i embeddingi fragmentów (krok B: embedMany, model z OPENROUTER_EMBEDDING_MODEL – lib/model.ts).
 // Warsztat 2 (Standard): postęp importu (etapy), lista dokumentów, zastępowanie po tytule, „Usuń”, błędy z etapem.
+// Warsztat 2 (Dla szybkich, wyzwanie): wybór sposobu dzielenia – „akapity” (domyślnie) albo „stałe kawałki”.
 // Tabele documents i chunks (SQL z lekcji 6, W1). Połączenie z bazą tylko na serwerze (lib/supabase.ts).
 import type { SupabaseClient } from "@supabase/supabase-js";
 
@@ -9,6 +10,13 @@ export const UPLOAD_API = "/api/upload";
 export const MAX_TITLE_CHARS = 200;
 export const MAX_CONTENT_CHARS = 20000;
 export const MAX_CHUNK_CHARS = 800;
+export const FIXED_CHUNK_CHARS = 300; // „stałe kawałki”: długość kawałka
+export const FIXED_CHUNK_OVERLAP = 50; // „stałe kawałki”: zakładka – tyle znaków powtarza się z poprzedniego kawałka
+export type SplitMode = "akapity" | "kawalki";
+export const SPLIT_MODES: { value: SplitMode; label: string }[] = [
+  { value: "akapity", label: "akapity" },
+  { value: "kawalki", label: "stałe kawałki (300 znaków, zakładka 50)" },
+];
 export const EMBEDDING_DIMENSIONS = 1536; // kolumna chunks.embedding vector(1536)
 export const MAX_BACKFILL_CHUNKS = 200; // ile starych fragmentów bez embeddingu uzupełniamy przy jednym imporcie
 
@@ -114,6 +122,23 @@ export function splitIntoChunks(text: string): string[] {
   );
 }
 
+// „Stałe kawałki”: po 300 znaków, każdy kolejny zaczyna się 50 znaków przed końcem poprzedniego.
+export function splitIntoFixedChunks(text: string): string[] {
+  const clean = text.replace(/\r\n?/g, "\n").trim();
+  const step = FIXED_CHUNK_CHARS - FIXED_CHUNK_OVERLAP;
+  const parts: string[] = [];
+  for (let start = 0; start < clean.length; start += step) {
+    const part = clean.slice(start, start + FIXED_CHUNK_CHARS).trim();
+    if (part) parts.push(part);
+    if (start + FIXED_CHUNK_CHARS >= clean.length) break;
+  }
+  return parts;
+}
+
+export function splitText(text: string, mode: SplitMode): string[] {
+  return mode === "kawalki" ? splitIntoFixedChunks(text) : splitIntoChunks(text);
+}
+
 function splitLongParagraph(paragraph: string): string[] {
   // Zdanie kończy się kropką, wykrzyknikiem, pytajnikiem albo wielokropkiem (z ewentualnym cudzysłowem/nawiasem).
   const sentences = paragraph.split(/(?<=[.!?…]["”’)]?)\s+/).filter((sentence) => sentence.length > 0);
@@ -167,7 +192,7 @@ export type KnowledgeStore = {
   saveDocument(
     title: string,
     content: string,
-    options?: { replace?: boolean; onStage?: (stage: UploadStage) => void },
+    options?: { replace?: boolean; mode?: SplitMode; onStage?: (stage: UploadStage) => void },
   ): Promise<SaveResult>;
   listDocuments(): Promise<DocumentSummary[]>;
   hasTitle(title: string): Promise<boolean>;
@@ -207,7 +232,7 @@ export function createKnowledgeStore(db: KnowledgeDb, embed: Embedder | null): K
       onStage("split");
       const oldIds = await db.findDocumentIdsByTitle(title).catch((error: unknown) => fail("db", error));
       if (oldIds.length > 0 && !options.replace) throw new KnowledgeError("exists", "split", "Dokument o tym tytule już istnieje.");
-      const chunks = splitIntoChunks(content);
+      const chunks = splitText(content, options.mode ?? "akapity");
       if (chunks.length === 0) throw new KnowledgeError("db", "split", "Brak fragmentów po podziale.");
 
       // 2. Tworzę embeddingi – nowe fragmenty i stare z pustą kolumną embedding, JEDNYM wywołaniem (embedMany)
@@ -385,6 +410,7 @@ export function createUploadApi(deps: {
       const check = checkUploadInput(body);
       if (!check.ok) return json({ komunikat: check.komunikat }, 400);
       const replace = (body as { zastap?: unknown }).zastap === true;
+      const mode: SplitMode = (body as { podzial?: unknown }).podzial === "kawalki" ? "kawalki" : "akapity";
       const store = deps.getStore();
       if (!store) return json({ komunikat: KNOWLEDGE_MESSAGES.notConfigured }, 503);
       // Ten sam tytuł bez potwierdzenia – pytamy, zanim cokolwiek zrobimy.
@@ -405,6 +431,7 @@ export function createUploadApi(deps: {
           try {
             const saved = await store.saveDocument(check.title, check.content, {
               replace,
+              mode,
               onStage: (etap) => send({ typ: "etap", etap }),
             });
             send({

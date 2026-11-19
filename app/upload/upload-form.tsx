@@ -5,6 +5,7 @@ import {
   KNOWLEDGE_MESSAGES,
   MAX_CONTENT_CHARS,
   MAX_TITLE_CHARS,
+  SPLIT_MODES,
   STAGE_PROGRESS,
   UPLOAD_API,
   checkUploadInput,
@@ -13,6 +14,7 @@ import {
   interruptedMessage,
   replaceQuestion,
   type DocumentSummary,
+  type SplitMode,
   type UploadEvent,
   type UploadStage,
 } from "@/lib/amber-knowledge";
@@ -21,9 +23,11 @@ type Message = { kind: "ok" | "error" | "progress"; text: string; extra?: string
 
 // Lekcja 6, Warsztat 2: formularz „Tytuł” + „Treść” → /api/upload.
 // Standard: postęp importu, blokada przycisku, lista dokumentów, zastępowanie po tytule, „Usuń”.
+// Dla szybkich (wyzwanie): wybór sposobu dzielenia tekstu – domyślnie „akapity”.
 export default function UploadForm({ initialDocuments }: { initialDocuments: DocumentSummary[] }) {
   const [title, setTitle] = useState("");
   const [content, setContent] = useState("");
+  const [mode, setMode] = useState<SplitMode>("akapity");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<Message | null>(null);
   const [documents, setDocuments] = useState<DocumentSummary[]>(initialDocuments);
@@ -44,7 +48,7 @@ export default function UploadForm({ initialDocuments }: { initialDocuments: Doc
       const response = await fetch(UPLOAD_API, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ tytul: title, tresc: content, zastap: replace }),
+        body: JSON.stringify({ tytul: title, tresc: content, zastap: replace, podzial: mode }),
       });
       if (!(response.headers.get("Content-Type") ?? "").includes("ndjson") || !response.body) {
         // Odpowiedź bez postępu: 401, 400, 409 (ten sam tytuł) albo 503.
@@ -161,8 +165,20 @@ export default function UploadForm({ initialDocuments }: { initialDocuments: Doc
         </label>
         <textarea id="upload-content" rows={16} value={content} maxLength={MAX_CONTENT_CHARS} disabled={busy} onChange={(e) => setContent(e.target.value)} />
         <p className="hint">
-          {content.length} / {MAX_CONTENT_CHARS} znaków. Każdy akapit (tekst oddzielony pustą linią) to osobny fragment.
+          {content.length} / {MAX_CONTENT_CHARS} znaków.{" "}
+          {mode === "akapity"
+            ? "Każdy akapit (tekst oddzielony pustą linią) to osobny fragment."
+            : "Tekst zostanie pocięty na kawałki po 300 znaków, każdy zaczyna się 50 znaków przed końcem poprzedniego."}
         </p>
+        <fieldset className="upload-mode" disabled={busy}>
+          <legend className="profile-label">Sposób dzielenia tekstu</legend>
+          {SPLIT_MODES.map((option) => (
+            <label key={option.value}>
+              <input type="radio" name="podzial" value={option.value} checked={mode === option.value} onChange={() => setMode(option.value)} />{" "}
+              {option.label}
+            </label>
+          ))}
+        </fieldset>
         <button type="submit" className="logout" disabled={busy}>
           Dodaj do bazy wiedzy
         </button>
