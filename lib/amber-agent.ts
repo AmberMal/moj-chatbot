@@ -50,9 +50,12 @@ export const AGENT_TOOL_NAMES = [
   "przestepczosc",
   // Lekcja 5, Warsztat 3: trwały profil klienta (user_profiles).
   "zapiszProfil",
+  // Lekcja 6, Warsztat 3: wyszukiwanie w bazie wiedzy.
+  "searchKnowledge",
 ] as const;
 // Etykiety użytych narzędzi w metadanych (te same nazwy co w lib/amber-history.ts).
 const LABEL_ORDER = [
+  "searchKnowledge",
   "wyszukiwanie",
   "aktualnyCzas",
   "czas",
@@ -296,9 +299,37 @@ export type AgentDeps = {
 };
 
 // conversationId (lekcja 5) – numer rozmowy w bazie; jak stats służy tylko przeglądarce i nie wraca na serwer.
+// Lekcja 6, Warsztat 3 (Standard): źródło z bazy wiedzy pod odpowiedzią (tylko do wyświetlenia – nie wraca na serwer).
+export type KnowledgeSource = { tytul: string; procent: number; tresc: string };
+export const MAX_KNOWLEDGE_SOURCES = 6;
+
+// Fragmenty z searchKnowledge (już po progu podobieństwa) użyte w odpowiedzi: tylko dokumenty z linii „Źródło: …”.
+// Bez linii „Źródło:” (np. „Nie mam tej informacji w bazie wiedzy”) – brak źródeł.
+export function pickKnowledgeSources(replyText: string, outputs: unknown[]): KnowledgeSource[] {
+  const lines = replyText.split("\n").filter((line) => /^\s*Źródło:/.test(line));
+  if (lines.length === 0) return [];
+  const sourceLine = lines[lines.length - 1].replace(/^\s*Źródło:\s*/, "").toLocaleLowerCase("pl-PL");
+  const best = new Map<string, KnowledgeSource>();
+  for (const output of outputs) {
+    const o = output as { ok?: unknown; fragmenty?: unknown } | null;
+    if (o?.ok !== true || !Array.isArray(o.fragmenty)) continue;
+    for (const f of o.fragmenty as Array<Record<string, unknown>>) {
+      const tytul = typeof f.tytul === "string" ? f.tytul.slice(0, 200) : "";
+      const tresc = typeof f.tresc === "string" ? f.tresc.slice(0, 2000) : "";
+      const sim = typeof f.podobienstwo === "number" && Number.isFinite(f.podobienstwo) ? f.podobienstwo : 0;
+      if (!tytul || !tresc || !sourceLine.includes(tytul.toLocaleLowerCase("pl-PL"))) continue;
+      const key = `${tytul}\u0000${tresc}`;
+      const procent = Math.round(sim * 100);
+      if (!best.has(key) || best.get(key)!.procent < procent) best.set(key, { tytul, procent, tresc });
+    }
+  }
+  return [...best.values()].sort((a, b) => b.procent - a.procent).slice(0, MAX_KNOWLEDGE_SOURCES);
+}
+
 type AgentMetadata = {
   kind: "chat";
   sig: string;
+  knowledge?: KnowledgeSource[];
   fetchedAt?: string;
   tools?: string[];
   model?: string;
@@ -435,6 +466,11 @@ export function describeToolResult(r: StepResult): string | null {
       return `informacjeOUrzadzeniu (${str(o.producent)}): ${str(o.komunikat)}`;
     case "generujObraz":
       return "generujObraz: obraz gotowy";
+    case "searchKnowledge": {
+      const list = Array.isArray(o.fragmenty) ? (o.fragmenty as Array<Record<string, unknown>>) : [];
+      const titles = [...new Set(list.map((f) => str(f.tytul)).filter(Boolean))].join(", ");
+      return list.length > 0 ? `baza wiedzy: ${list.length} fragmentów (${titles})` : "baza wiedzy: brak pasujących fragmentów";
+    }
     default:
       return null;
   }
@@ -822,6 +858,11 @@ function streamChat({
         log(`[Amber] /api/agent – ${stepLimitMessage(stepLimit)} (podsumowanie: ${results.length} wyników).`);
       }
       const sources = done.flatMap((s) => s.sources);
+      // Lekcja 6 (Standard): źródła z bazy wiedzy użyte w odpowiedzi (tytuł, % podobieństwa, dokładny fragment).
+      const knowledge = pickKnowledgeSources(
+        replyText,
+        results.filter((r) => r.name === "searchKnowledge" && r.kind === "ok").map((r) => r.output),
+      );
       const called = new Set(done.flatMap((s) => s.toolNames));
       const searched = done.some((s) => s.searchSources > 0);
       const tools = LABEL_ORDER.filter((name) => (name === "wyszukiwanie" ? searched : called.has(name)));
@@ -883,10 +924,12 @@ function streamChat({
         ...(model ? { model } : {}),
         stats,
         ...(savedConversationId !== undefined ? { conversationId: savedConversationId } : {}),
+        ...(knowledge.length > 0 ? { knowledge } : {}),
       };
 
       if (sources.length > 0) log(`[Amber] /api/agent – źródła (${sources.length}): ${sources.map((s) => s.url).join(" | ")}`);
       if (tools.length > 0) log(`[Amber] /api/agent – użyte narzędzia: ${tools.join(", ")}`);
+      if (knowledge.length > 0) log(`[Amber] /api/agent – źródła z bazy wiedzy: ${knowledge.map((k) => `${k.tytul} ${k.procent}%`).join(" | ")}`);
       if (askedAboutImage) log(`[Amber] /api/agent – zdjęcie przeanalizował model: ${model || "(brak w odpowiedzi API)"}`);
       log(`[Amber] /api/agent – kroki modelu: ${stats.kroki}, wywołania narzędzi: ${stats.narzedzia}, czas: ${stats.czasMs} ms`);
 

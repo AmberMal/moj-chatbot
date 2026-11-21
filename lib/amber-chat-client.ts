@@ -57,13 +57,34 @@ export function prepareAgentMessages(messages: UIMessage[]): UIMessage[] {
   });
 }
 
-// Liczniki (stats) i numer rozmowy w bazie (conversationId, lekcja 5) służą tylko przeglądarce – nie wracają na serwer.
+// Liczniki (stats), numer rozmowy w bazie (conversationId, lekcja 5) i źródła z bazy wiedzy (knowledge, lekcja 6)
+// służą tylko przeglądarce – nie wracają na serwer.
 function withoutStats(metadata: unknown): unknown {
-  if (typeof metadata !== "object" || metadata === null || !("stats" in metadata || "conversationId" in metadata)) {
+  if (
+    typeof metadata !== "object" ||
+    metadata === null ||
+    !("stats" in metadata || "conversationId" in metadata || "knowledge" in metadata)
+  ) {
     return metadata;
   }
-  const { stats: _stats, conversationId: _conversationId, ...rest } = metadata as Record<string, unknown>;
+  const { stats: _stats, conversationId: _conversationId, knowledge: _knowledge, ...rest } = metadata as Record<string, unknown>;
   return rest;
+}
+
+// Lekcja 6, Warsztat 3 (Standard): źródła z bazy wiedzy z metadanych odpowiedzi (tytuł, % podobieństwa, fragment).
+export type KnowledgeSourceView = { tytul: string; procent: number; tresc: string };
+export function readKnowledgeSources(metadata: unknown): KnowledgeSourceView[] {
+  const list = (metadata as { knowledge?: unknown } | null | undefined)?.knowledge;
+  if (!Array.isArray(list)) return [];
+  return list
+    .filter(
+      (k): k is KnowledgeSourceView =>
+        typeof k === "object" && k !== null &&
+        typeof (k as KnowledgeSourceView).tytul === "string" &&
+        typeof (k as KnowledgeSourceView).tresc === "string" &&
+        typeof (k as KnowledgeSourceView).procent === "number",
+    )
+    .slice(0, 6);
 }
 
 // ---------------------------------------------------------------------------

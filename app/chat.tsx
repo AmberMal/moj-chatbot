@@ -36,6 +36,7 @@ import {
   prepareAgentMessages,
   readAnalysisResponse,
   readGeneratedImagePart,
+  readKnowledgeSources,
   readConversationId,
   readLatestConversation,
   readProfileResponse,
@@ -66,6 +67,8 @@ const TOOL_LABELS: Record<string, string> = {
   przestepczosc: "📊 przestepczosc",
   // Lekcja 5, Warsztat 3: zapis w profilu klienta.
   zapiszProfil: "👤 zapiszProfil",
+  // Lekcja 6, Warsztat 3 (Standard): wyszukiwanie w bazie wiedzy.
+  searchKnowledge: "📚 baza wiedzy",
 };
 
 // Lekcja 3 (Vision): zdjęcia jpg/png/webp do 4 MB. Przed wysłaniem przeglądarka
@@ -503,6 +506,24 @@ export default function Chat() {
                 }
                 return null;
               })}
+              {/* Lekcja 6, Warsztat 3 (Standard): źródła z bazy wiedzy – tytuł, podobieństwo i dokładny fragment */}
+              {message.role === "assistant" && readKnowledgeSources(message.metadata).length > 0 && (
+                <div className="sources knowledge-sources">
+                  <strong>Źródła z bazy wiedzy</strong>
+                  <ul>
+                    {readKnowledgeSources(message.metadata).map((k, i) => (
+                      <li key={i}>
+                        <details>
+                          <summary>
+                            {k.tytul} · podobieństwo {k.procent}% <span className="show-fragment">Pokaż fragment</span>
+                          </summary>
+                          <blockquote>{k.tresc}</blockquote>
+                        </details>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
               {message.role === "assistant" && sources.length > 0 && (
                 <div className="sources">
                   <strong>Źródła</strong>

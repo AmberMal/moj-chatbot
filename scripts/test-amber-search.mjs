@@ -1,9 +1,11 @@
-// Testy lekcji 6, Warsztat 3 (Minimum): narzędzie searchKnowledge i zasady bazy wiedzy w instrukcji czatu
+// Testy lekcji 6, Warsztat 3 (Minimum + Standard): narzędzie searchKnowledge, próg podobieństwa, źródła pod odpowiedzią
+// i zasady bazy wiedzy w instrukcji czatu
 // – BEZ Supabase i BEZ OpenRouter.
 // Uruchomienie (w folderze projektu):
 //   node --experimental-strip-types scripts/test-amber-search.mjs
 import { readFileSync } from "node:fs";
 import {
+  KNOWLEDGE_MIN_SIMILARITY,
   MAX_QUERY_CHARS,
   QUERY_EMBEDDING_DIMENSIONS,
   SEARCH_KNOWLEDGE_DESCRIPTION,
@@ -14,6 +16,9 @@ import {
   searchKnowledge,
 } from "../lib/amber-knowledge-search.ts";
 import { EMBEDDING_DIMENSIONS } from "../lib/amber-knowledge.ts";
+import { AGENT_TOOL_NAMES, describeToolResult, pickKnowledgeSources } from "../lib/amber-agent.ts";
+import { AGENT_TOOL_PART_TYPES, HISTORY_TOOL_NAMES } from "../lib/amber-history.ts";
+import { prepareAgentMessages, readKnowledgeSources } from "../lib/amber-chat-client.ts";
 import { AMBER_ANALYZE_INSTRUCTIONS, AMBER_CHAT_INSTRUCTIONS, AMBER_CHAT_INSTRUCTIONS_DEV } from "../lib/amber-instructions.ts";
 
 let passed = 0;
@@ -31,8 +36,8 @@ const vec = Array.from({ length: EMBEDDING_DIMENSIONS }, () => 0.1);
 const rows = [
   { tytul: "Cennik 2026", tresc: "Pakiet Start kosztuje 490 zł netto miesięcznie.", podobienstwo: 0.61 },
   { tytul: "Cennik 2026", tresc: "Pakiet Zespół kosztuje 1290 zł.", podobienstwo: 0.52 },
-  { tytul: "FAQ", tresc: "Czy jest okres próbny?", podobienstwo: 0.41 },
-  { tytul: "FAQ", tresc: "nadmiarowy", podobienstwo: 0.3 },
+  { tytul: "FAQ", tresc: "Czy jest okres próbny?", podobienstwo: 0.48 },
+  { tytul: "FAQ", tresc: "nadmiarowy", podobienstwo: 0.47 },
 ];
 
 // --- logika narzędzia ---
@@ -60,6 +65,58 @@ console.error = origError;
 check("błąd modelu: komunikat", !e1.ok && e1.komunikat === SEARCH_MESSAGES.error);
 check("błąd bazy: komunikat", !e2.ok && e2.komunikat === SEARCH_MESSAGES.error);
 check("zła długość embeddingu: komunikat", !e3.ok);
+
+// --- Standard: próg podobieństwa (jedno miejsce w kodzie) ---
+check("próg między 0 a 1", KNOWLEDGE_MIN_SIMILARITY > 0 && KNOWLEDGE_MIN_SIMILARITY < 1);
+const mixed = [
+  { tytul: "A", tresc: "wysoko", podobienstwo: KNOWLEDGE_MIN_SIMILARITY + 0.2 },
+  { tytul: "B", tresc: "na progu", podobienstwo: KNOWLEDGE_MIN_SIMILARITY },
+  { tytul: "C", tresc: "nisko", podobienstwo: KNOWLEDGE_MIN_SIMILARITY - 0.01 },
+];
+const rMix = await searchKnowledge("pytanie", { embed: deps.embed, matchChunks: async () => mixed });
+check("próg: niskie odrzucone, na progu zostaje", rMix.ok && rMix.fragmenty.map((f) => f.tytul).join() === "A,B" && rMix.ponizejProgu === 1);
+const rLow = await searchKnowledge("pytanie", { embed: deps.embed, matchChunks: async () => [mixed[2]] });
+check("próg: wszystkie niskie → brak fragmentów i uwaga", rLow.ok && rLow.fragmenty.length === 0 && rLow.uwaga === SEARCH_MESSAGES.belowThreshold);
+const srcFiles = ["lib/amber-knowledge-search.ts", "lib/amber-agent.ts", "lib/amber-instructions.ts", "app/chat.tsx", "lib/amber-chat-client.ts"];
+check("próg zapisany tylko w jednym pliku", srcFiles.filter((f) => /MIN_SIMILARITY\s*=/.test(readFileSync(f, "utf8"))).join() === "lib/amber-knowledge-search.ts");
+
+// --- Standard: źródła użyte w odpowiedzi ---
+const outA = { ok: true, fragmenty: [
+  { tytul: "Cennik 2026", tresc: "Pakiet Start kosztuje 490 zł netto miesięcznie.", podobienstwo: 0.612 },
+  { tytul: "FAQ", tresc: "Czy jest okres próbny?", podobienstwo: 0.41 },
+] };
+const outB = { ok: true, fragmenty: [{ tytul: "Cennik 2026", tresc: "Pakiet Start kosztuje 490 zł netto miesięcznie.", podobienstwo: 0.55 }] };
+const picked = pickKnowledgeSources("Pakiet Start kosztuje 490 zł netto.\n\nŹródło: Cennik 2026", [outA, outB]);
+check("źródła: tylko dokumenty z linii „Źródło:”", picked.length === 1 && picked[0].tytul === "Cennik 2026");
+check("źródła: procent i dokładny fragment", picked[0].procent === 61 && picked[0].tresc === "Pakiet Start kosztuje 490 zł netto miesięcznie.");
+check("źródła: bez powtórzeń (najwyższy %)", picked.length === 1);
+const two = pickKnowledgeSources("…\nŹródło: Cennik 2026, FAQ", [outA]);
+check("źródła: kilka dokumentów po przecinku", two.length === 2 && two[0].procent >= two[1].procent);
+check("źródła: odmowa bez linii „Źródło:” → brak", pickKnowledgeSources("Nie mam tej informacji w bazie wiedzy.", [outA]).length === 0);
+check("źródła: błąd narzędzia pomijany", pickKnowledgeSources("Źródło: FAQ", [{ ok: false, komunikat: "x" }, null]).length === 0);
+check("źródła: wielkość liter bez znaczenia", pickKnowledgeSources("Źródło: faq", [outA]).length === 1);
+check("opis kroku searchKnowledge", describeToolResult({ step: 0, name: "searchKnowledge", input: {}, kind: "ok", output: outA }) === "baza wiedzy: 2 fragmentów (Cennik 2026, FAQ)");
+
+// --- Standard: etykieta i listy narzędzi ---
+check("searchKnowledge na listach (agent, historia, części)", AGENT_TOOL_NAMES.includes("searchKnowledge") && HISTORY_TOOL_NAMES.includes("searchKnowledge") && AGENT_TOOL_PART_TYPES.includes("tool-searchKnowledge"));
+const chatTsx = readFileSync("app/chat.tsx", "utf8");
+check("etykieta „📚 baza wiedzy”", chatTsx.includes('searchKnowledge: "📚 baza wiedzy"'));
+check("lista źródeł z % i „Pokaż fragment”", chatTsx.includes("Źródła z bazy wiedzy") && chatTsx.includes("Pokaż fragment") && chatTsx.includes("{k.procent}%") && chatTsx.includes("{k.tresc}"));
+
+// --- Standard: źródła zostają w przeglądarce (nie wracają na serwer) ---
+const knowledgeMeta = [{ tytul: "FAQ", procent: 51, tresc: "Treść" }];
+check("readKnowledgeSources", readKnowledgeSources({ knowledge: knowledgeMeta }).length === 1 && readKnowledgeSources({}).length === 0 && readKnowledgeSources({ knowledge: [{ tytul: 1 }] }).length === 0);
+const prepared = prepareAgentMessages([
+  { id: "u", role: "user", parts: [{ type: "text", text: "Ile?" }] },
+  { id: "a", role: "assistant", metadata: { kind: "chat", sig: "x", tools: ["searchKnowledge"], knowledge: knowledgeMeta, stats: {} },
+    parts: [{ type: "tool-searchKnowledge", toolCallId: "t", state: "output-available", input: {}, output: outA }, { type: "text", text: "Odp.\nŹródło: FAQ" }] },
+]);
+const preparedMeta = prepared[1].metadata;
+check("historia: bez knowledge i stats w metadanych", !("knowledge" in preparedMeta) && !("stats" in preparedMeta) && preparedMeta.sig === "x");
+check("historia: bez części narzędzia bazy wiedzy", prepared[1].parts.every((p) => p.type !== "tool-searchKnowledge"));
+
+// --- Standard: odpowiedź częściowa ---
+check("instrukcja: odpowiedź częściowa", AMBER_CHAT_INSTRUCTIONS.includes("Gdy fragmenty zawierają tylko część odpowiedzi") && AMBER_CHAT_INSTRUCTIONS.includes("czego w bazie wiedzy brakuje") && AMBER_CHAT_INSTRUCTIONS.includes("nie wyliczaj sama"));
 
 // --- narzędzie AI SDK ---
 const t = createSearchKnowledgeTool(deps);

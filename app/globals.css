@@ -549,3 +549,18 @@ h1 { margin: 0; font-size: 26px; }
 .upload-mode legend { padding: 0; margin-bottom: 6px; }
 .upload-mode label { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
 .upload-form .upload-mode input { width: auto; padding: 0; }
+/* Lekcja 6, Warsztat 3 (Standard): źródła z bazy wiedzy pod odpowiedzią */
+.knowledge-sources ul { list-style: none; padding: 0; }
+.knowledge-sources details summary { cursor: pointer; list-style: none; }
+.knowledge-sources details summary::-webkit-details-marker { display: none; }
+.knowledge-sources .show-fragment { margin-left: 6px; color: var(--link); text-decoration: underline; font-size: 13px; }
+.knowledge-sources details[open] .show-fragment { display: none; }
+.knowledge-sources blockquote {
+  margin: 6px 0 4px;
+  padding: 8px 12px;
+  border-left: 3px solid var(--border);
+  background: var(--surface);
+  white-space: pre-wrap;
+  font-size: 14px;
+  line-height: 1.45;
+}
