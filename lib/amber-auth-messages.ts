@@ -17,6 +17,8 @@ export const AUTH_MESSAGES = {
   network: "Brak połączenia z serwerem logowania. Spróbuj ponownie.",
   loginFailed: "Nie udało się zalogować. Spróbuj ponownie.",
   signupFailed: "Nie udało się założyć konta. Spróbuj ponownie.",
+  googleFailed: "Nie udało się zalogować przez Google. Spróbuj ponownie albo zaloguj się e-mailem.",
+  googleCancelled: "Logowanie przez Google zostało anulowane.",
 } as const;
 
 export type AuthMode = "login" | "signup";

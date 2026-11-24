@@ -2,7 +2,7 @@
 // Uruchamianie: node --experimental-strip-types scripts/test-amber-auth.mjs
 import { readFileSync, existsSync } from "node:fs";
 import { AUTH_MESSAGES, AUTH_MIN_PASSWORD, authErrorMessage, isExistingAccountSignup, validateAuthInput } from "../lib/amber-auth-messages.ts";
-import { afterLoginPath, loginUrl, safeNextPath } from "../lib/amber-auth-redirect.ts";
+import { afterLoginPath, appOrigin, loginUrl, readAuthCallbackError, safeNextPath } from "../lib/amber-auth-redirect.ts";
 import { createAgentHandler } from "../lib/amber-agent.ts";
 import { createLatestConversationHandler, createConversationByIdHandler, createDeleteConversationHandler } from "../lib/amber-conversations.ts";
 import { createProfileApi } from "../lib/amber-profile.ts";
@@ -127,6 +127,28 @@ check("Nikt nie bierze user_id z zapytania ani od modelu", [...routes, "app/hist
   await order.GET(req("/api/profile"));
   check("Asynchroniczny magazyn: najpierw sesja, bez niej baza nie jest otwierana", calls.join(",") === "sesja");
 }
+
+console.log("\n=== 7. Warsztat 3: logowanie przez Google ===");
+check("Adres powrotu: lokalnie adres zapytania (bez localhost na sztywno)", appOrigin("http://localhost:3000/auth/google", new Headers(), true) === "http://localhost:3000" &&
+  appOrigin("http://127.0.0.1:4000/x", new Headers({ "x-forwarded-host": "zla.strona" }), true) === "http://127.0.0.1:4000");
+check("Adres powrotu: produkcja – x-forwarded-host (tylko poprawna nazwa)", appOrigin("http://wew/x", new Headers({ "x-forwarded-host": "amber-chatbot-tau.vercel.app" }), false) === "https://amber-chatbot-tau.vercel.app" &&
+  appOrigin("http://wew/x", new Headers({ "x-forwarded-host": "zla.strona/sciezka" }), false) === "http://wew");
+check("Kody błędów /login?blad= – tylko znane", readAuthCallbackError("google") === "google" && readAuthCallbackError("anulowano") === "anulowano" && readAuthCallbackError("<script>") === null);
+check("Komunikaty Google po polsku", AUTH_MESSAGES.googleFailed.includes("Google") && AUTH_MESSAGES.googleCancelled.includes("anulowane"));
+const gStart = read("app/auth/google/route.ts"), gBack = read("app/auth/callback/route.ts");
+check("/auth/google: signInWithOAuth google, redirectTo z appOrigin, next przez afterLoginPath", gStart.includes('provider: "google"') && gStart.includes("appOrigin(") && gStart.includes("afterLoginPath(") && !/localhost/.test(gStart));
+check("/auth/callback: exchangeCodeForSession, next przez afterLoginPath, błąd/anulowanie → /login?blad", gBack.includes("exchangeCodeForSession(code)") && gBack.includes("afterLoginPath(") &&
+  gBack.includes("\"anulowano\"") && gBack.includes("access_denied") && gBack.includes("blad=google") && !/localhost/.test(gBack));
+check("Bez Client ID / Client Secret w kodzie", ![gStart, gBack, read("lib/supabase-auth/route-client.ts")].some((f) => /client_?secret|client_?id|GOCSPX|googleusercontent/i.test(f)));
+check("Proxy przepuszcza /auth/google i /auth/callback", read("lib/supabase-auth/proxy.ts").includes('pathname === "/auth/google"') && read("lib/supabase-auth/proxy.ts").includes('pathname === "/auth/callback"'));
+check("/login: przycisk „Zaloguj przez Google”, logowanie e-mailem zostaje", read("app/login/auth-form.tsx").includes("Zaloguj przez Google") && read("app/login/auth-form.tsx").includes("signInWithPassword"));
+const { userFromMetadata } = await import("../lib/amber-user-info.ts");
+check("Imię i avatar: full_name + avatar_url (prawdziwe pola Google)", JSON.stringify(userFromMetadata({ full_name: "Malwina M", name: "x", avatar_url: "https://lh3.googleusercontent.com/a/1", picture: "https://x/2" })) === JSON.stringify({ name: "Malwina M", avatarUrl: "https://lh3.googleusercontent.com/a/1" }));
+check("Imię i avatar: zapasowo name + picture", JSON.stringify(userFromMetadata({ name: "Ola", picture: "https://lh3.googleusercontent.com/a/2" })) === JSON.stringify({ name: "Ola", avatarUrl: "https://lh3.googleusercontent.com/a/2" }));
+check("Konto e-mail (bez danych Google) → bez imienia i avatara", JSON.stringify(userFromMetadata({ email_verified: true })) === JSON.stringify({ name: null, avatarUrl: null }) && JSON.stringify(userFromMetadata(null)) === JSON.stringify({ name: null, avatarUrl: null }));
+check("Avatar tylko https (bez javascript:, http:)", userFromMetadata({ avatar_url: "javascript:alert(1)" }).avatarUrl === null && userFromMetadata({ picture: "http://x/y.png" }).avatarUrl === null);
+const chatFile2 = read("app/chat.tsx");
+check("Nagłówek: zwykły znacznik img z avatarem i imię", chatFile2.includes('<img className="user-avatar" src={avatarUrl}') && chatFile2.includes('className="user-name"'));
 
 console.log(`\nWynik: ${ok} zaliczonych, ${bad} niezaliczonych.`);
 process.exitCode = bad === 0 ? 0 : 1;

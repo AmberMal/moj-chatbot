@@ -127,7 +127,15 @@ const transport = new DefaultChatTransport<UIMessage>({
   }),
 });
 
-export default function Chat({ email }: { email: string }) {
+export default function Chat({
+  email,
+  name = null,
+  avatarUrl = null,
+}: {
+  email: string;
+  name?: string | null;
+  avatarUrl?: string | null;
+}) {
   const [input, setInput] = useState("");
   const [pendingImage, setPendingImage] = useState<PendingImage | null>(null);
   const [imageError, setImageError] = useState<string | null>(null);
@@ -411,8 +419,17 @@ export default function Chat({ email }: { email: string }) {
   return (
     <>
       <div className="toolbar">
-        {/* Lekcja 7: e-mail zalogowanej osoby */}
-        {email && <span className="user-email">{email}</span>}
+        {/* Lekcja 7: zalogowana osoba – Warsztat 3: imię i avatar z konta Google (konto e-mail: sam adres) */}
+        <span className="user-info">
+          {avatarUrl && (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img className="user-avatar" src={avatarUrl} alt="" width={32} height={32} referrerPolicy="no-referrer" />
+          )}
+          <span className="user-text">
+            {name && <span className="user-name">{name}</span>}
+            {email && <span className="user-email">{email}</span>}
+          </span>
+        </span>
         {/* Lekcja 5, Warsztat 2: nowa rozmowa (stara zostaje w bazie) */}
         <button type="button" className="logout" disabled={isLocked} onClick={handleNewConversation}>
           Nowa rozmowa

@@ -12,11 +12,11 @@ import {
 } from "../../lib/amber-auth-messages";
 
 // Lekcja 7: dwie zakładki – „Zaloguj się” i „Załóż konto” (e-mail i hasło).
-export default function AuthForm({ configured, next }: { configured: boolean; next: string }) {
+export default function AuthForm({ configured, next, initialError = "" }: { configured: boolean; next: string; initialError?: string }) {
   const [mode, setMode] = useState<AuthMode>("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [error, setError] = useState("");
+  const [error, setError] = useState(initialError);
   const [info, setInfo] = useState("");
   const [pending, setPending] = useState(false);
 
@@ -130,6 +130,23 @@ export default function AuthForm({ configured, next }: { configured: boolean; ne
       <button type="submit" className="auth-submit" disabled={pending}>
         {pending ? "Chwileczkę…" : isLogin ? "Zaloguj się" : "Załóż konto"}
       </button>
+      {/* Lekcja 7, Warsztat 3: logowanie przez Google (start na serwerze: /auth/google) */}
+      <div className="auth-divider">albo</div>
+      <a
+        className={pending ? "auth-google disabled" : "auth-google"}
+        href={`/auth/google?next=${encodeURIComponent(next)}`}
+        aria-disabled={pending}
+        onClick={(event) => {
+          if (pending) {
+            event.preventDefault();
+            return;
+          }
+          setError("");
+          setPending(true);
+        }}
+      >
+        {pending ? "Chwileczkę…" : "Zaloguj przez Google"}
+      </a>
       {error && (
         <p className="error" role="alert">
           {error}

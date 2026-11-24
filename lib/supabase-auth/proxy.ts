@@ -9,8 +9,15 @@ import { LOGIN_PATH, safeNextPath } from "../amber-auth-redirect";
 export const LOGIN_PAGE = LOGIN_PATH;
 
 // Strony dostępne bez logowania. Endpointy (/api) nie są przekierowywane – same zwracają 401.
+// Lekcja 7, Warsztat 3: trasy logowania przez Google (/auth/google, /auth/callback) – też bez logowania.
 export function isPublicPath(pathname: string): boolean {
-  return pathname === LOGIN_PAGE || pathname.startsWith(`${LOGIN_PAGE}/`) || pathname.startsWith("/api/");
+  return (
+    pathname === LOGIN_PAGE ||
+    pathname.startsWith(`${LOGIN_PAGE}/`) ||
+    pathname.startsWith("/api/") ||
+    pathname === "/auth/google" ||
+    pathname === "/auth/callback"
+  );
 }
 
 export async function updateSession(request: NextRequest) {

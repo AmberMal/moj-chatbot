@@ -574,3 +574,14 @@ h1 { margin: 0; font-size: 26px; }
 .auth-submit { padding: 10px 16px; border: 0; border-radius: 10px; background: #F0C143; color: #111; font: inherit; font-weight: 600; cursor: pointer; }
 .auth-submit:disabled { opacity: 0.6; cursor: not-allowed; }
 .auth-info { margin: 0; color: #2f6b2f; }
+
+/* Lekcja 7, Warsztat 3: logowanie przez Google, imię i avatar */
+.auth-divider { text-align: center; color: var(--muted); font-size: 0.9rem; }
+.auth-google { display: block; text-align: center; padding: 10px 16px; border: 1px solid #d9d4c7; border-radius: 10px; background: #fff; color: #111; font-weight: 600; text-decoration: none; }
+.auth-google:hover { border-color: #F0C143; }
+.auth-google.disabled { opacity: 0.6; pointer-events: none; }
+.user-info { display: flex; align-items: center; gap: 10px; margin-right: auto; min-width: 0; }
+.user-avatar { width: 32px; height: 32px; border-radius: 50%; object-fit: cover; flex: 0 0 auto; }
+.user-text { display: flex; flex-direction: column; min-width: 0; }
+.user-name { font-weight: 600; overflow-wrap: anywhere; }
+.user-info .user-email { margin-right: 0; }

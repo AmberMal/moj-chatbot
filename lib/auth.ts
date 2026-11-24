@@ -2,8 +2,11 @@
 // Ten plik działa tylko na serwerze. Tożsamość ustala WYŁĄCZNIE serwer ze zweryfikowanej sesji
 // (supabase.auth.getClaims() – sprawdza podpis i ważność tokenu). Nigdy z formularza, adresu strony ani od modelu.
 import { createSupabaseServerClient } from "./supabase-auth/server";
+import { userFromMetadata } from "./amber-user-info";
 
-export type CurrentUser = { id: string; email: string };
+// Lekcja 7, Warsztat 3: imię i avatar z konta Google (pola sprawdzone w prawdziwych danych użytkownika:
+// full_name / name oraz avatar_url / picture). Konto e-mail + hasło ich nie ma → null.
+export type CurrentUser = { id: string; email: string; name: string | null; avatarUrl: string | null };
 
 export async function getCurrentUser(): Promise<CurrentUser | null> {
   const supabase = await createSupabaseServerClient();
@@ -12,7 +15,7 @@ export async function getCurrentUser(): Promise<CurrentUser | null> {
     const { data, error } = await supabase.auth.getClaims();
     const claims = data?.claims;
     if (error || !claims || typeof claims.sub !== "string" || !claims.sub) return null;
-    return { id: claims.sub, email: typeof claims.email === "string" ? claims.email : "" };
+    return { id: claims.sub, email: typeof claims.email === "string" ? claims.email : "", ...userFromMetadata(claims.user_metadata) };
   } catch (error) {
     const details = error instanceof Error ? error.message : String(error);
     console.error(`[Amber] Sprawdzanie sesji Supabase nie powiodło się: ${details.slice(0, 200)}`);

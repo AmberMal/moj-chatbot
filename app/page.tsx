@@ -17,7 +17,7 @@ export default async function Home() {
         <h1 className="brand-logo">Amber</h1>
         <p className="brand-tagline">Asystent Amber Security Systems Ltd – alarmy, CCTV i ochrona przeciwpożarowa</p>
       </header>
-      <Chat email={user.email} />
+      <Chat email={user.email} name={user.name} avatarUrl={user.avatarUrl} />
     </main>
   );
 }
