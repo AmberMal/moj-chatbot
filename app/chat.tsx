@@ -3,7 +3,6 @@
 import { useChat } from "@ai-sdk/react";
 import Link from "next/link";
 import { DefaultChatTransport, type UIMessage } from "ai";
-import { useRouter } from "next/navigation";
 import { createSupabaseBrowserClient } from "../lib/supabase-auth/client";
 import { Fragment, useEffect, useRef, useState, type ChangeEvent, type FormEvent } from "react";
 import {
@@ -128,7 +127,6 @@ const transport = new DefaultChatTransport<UIMessage>({
 });
 
 export default function Chat({ email }: { email: string }) {
-  const router = useRouter();
   const [input, setInput] = useState("");
   const [pendingImage, setPendingImage] = useState<PendingImage | null>(null);
   const [imageError, setImageError] = useState<string | null>(null);
@@ -393,13 +391,18 @@ export default function Chat({ email }: { email: string }) {
   }
 
   // Lekcja 7: wylogowanie z Supabase (usuwa ciasteczka sesji), potem strona logowania.
+  // Standard: najpierw czyścimy ekran (rozmowa, analizy, powitanie z profilu), potem pełne przejście na /login –
+  // pamięć strony i podręczna pamięć routera znikają, a „Wstecz” nie wraca do czatu (location.replace).
   async function handleLogout() {
     stop();
+    setMessages([]);
+    setAnalyses([]);
+    setGreeting(null);
+    setInput("");
     try {
       await createSupabaseBrowserClient()?.auth.signOut();
     } finally {
-      router.replace("/login");
-      router.refresh();
+      window.location.replace("/login");
     }
   }
 

@@ -1,6 +1,5 @@
 "use client";
 
-import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
 import { createSupabaseBrowserClient } from "../../lib/supabase-auth/client";
 import {
@@ -13,8 +12,7 @@ import {
 } from "../../lib/amber-auth-messages";
 
 // Lekcja 7: dwie zakładki – „Zaloguj się” i „Załóż konto” (e-mail i hasło).
-export default function AuthForm({ configured }: { configured: boolean }) {
-  const router = useRouter();
+export default function AuthForm({ configured, next }: { configured: boolean; next: string }) {
   const [mode, setMode] = useState<AuthMode>("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -30,8 +28,8 @@ export default function AuthForm({ configured }: { configured: boolean }) {
     );
   }
 
-  function switchMode(next: AuthMode) {
-    setMode(next);
+  function switchMode(target: AuthMode) {
+    setMode(target);
     setError("");
     setInfo("");
   }
@@ -60,37 +58,42 @@ export default function AuthForm({ configured }: { configured: boolean }) {
           : await supabase.auth.signUp(credentials);
       if (authError) {
         setError(authErrorMessage(authError, mode));
+        setPending(false);
         return;
       }
       if (mode === "signup" && isExistingAccountSignup(data.user)) {
         setError(AUTH_MESSAGES.accountExists);
+        setPending(false);
         return;
       }
       if (!data.session) {
         // Gdyby w Supabase było włączone „Confirm email” – konto czeka na potwierdzenie.
         setInfo(AUTH_MESSAGES.checkEmail);
         setMode("login");
+        setPending(false);
         return;
       }
       setPassword("");
-      router.replace("/");
-      router.refresh();
+      // Pełne przejście (bez starych danych w pamięci strony); strona logowania znika z historii „Wstecz”.
+      window.location.replace(next);
+      return;
+      // (po udanym logowaniu przycisk zostaje zablokowany aż do przejścia na nową stronę)
     } catch {
       setError(AUTH_MESSAGES.network);
-    } finally {
       setPending(false);
     }
   }
 
   const isLogin = mode === "login";
   return (
-    <form className="login" onSubmit={handleSubmit} noValidate>
+    <form className="login" onSubmit={handleSubmit} noValidate aria-busy={pending}>
       <div className="auth-tabs" role="tablist">
         <button
           type="button"
           role="tab"
           aria-selected={isLogin}
           className={isLogin ? "auth-tab active" : "auth-tab"}
+          disabled={pending}
           onClick={() => switchMode("login")}
         >
           Zaloguj się
@@ -100,6 +103,7 @@ export default function AuthForm({ configured }: { configured: boolean }) {
           role="tab"
           aria-selected={!isLogin}
           className={!isLogin ? "auth-tab active" : "auth-tab"}
+          disabled={pending}
           onClick={() => switchMode("signup")}
         >
           Załóż konto
@@ -110,6 +114,7 @@ export default function AuthForm({ configured }: { configured: boolean }) {
         id="email"
         type="email"
         autoComplete="email"
+        disabled={pending}
         value={email}
         onChange={(event) => setEmail(event.target.value)}
       />
@@ -118,6 +123,7 @@ export default function AuthForm({ configured }: { configured: boolean }) {
         id="password"
         type="password"
         autoComplete={isLogin ? "current-password" : "new-password"}
+        disabled={pending}
         value={password}
         onChange={(event) => setPassword(event.target.value)}
       />

@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getCurrentUser } from "../../lib/auth";
+import { loginUrl } from "../../lib/amber-auth-redirect";
 import type { Profile } from "../../lib/amber-profile";
 import { getProfileStore } from "../../lib/supabase";
 import ProfileEditor from "./profile-editor";
@@ -12,7 +13,7 @@ export const dynamic = "force-dynamic";
 export default async function ProfilePage() {
   // Lekcja 7: zalogowana osoba (zweryfikowana sesja Supabase). Bez niej – strona logowania.
   const user = await getCurrentUser();
-  if (!user) redirect("/login");
+  if (!user) redirect(loginUrl("/profile"));
 
   let profile: Profile | null = null;
   let problem: string | null = null;

@@ -294,7 +294,7 @@ console.log("\n=== 13. Pliki: strona, endpoint, linki ===");
   const chat = readFileSync(new URL("../app/chat.tsx", import.meta.url), "utf8");
   check("Endpoint: zalogowana osoba przez getCurrentUser, te same funkcje narzędzi", route.includes("(await getCurrentUser()) !== null") && /geocodeCity, getCurrency, getHolidays, getWeather, getWikipedia/.test(route) && route.includes("timeIn"));
   check("Endpoint: podsumowanie bez narzędzi (brak tools w generateText)", !/tools\s*:/.test(route));
-  check("Strona: zalogowana osoba sprawdzana na serwerze, bez logowania /login", page.includes("await getCurrentUser()") && page.includes('if (!user) redirect("/login")'));
+  check("Strona: zalogowana osoba sprawdzana na serwerze, bez logowania /login", page.includes("await getCurrentUser()") && page.includes('if (!user) redirect(loginUrl('));
   check("Link powrotny do czatu", page.includes('href="/"') && page.includes("Wróć do czatu"));
   check("Link do Dashboardu w nagłówku czatu", chat.includes('href="/dashboard"') && chat.includes("Dashboard podróży"));
   check("Formularz: „Dokąd jedziesz?”, „Kiedy?”, „Sprawdź”, „Odśwież”", ["Dokąd jedziesz?", "Kiedy?", '"Sprawdź"', '"Odśwież"'].every((t) => ui.includes(t)));

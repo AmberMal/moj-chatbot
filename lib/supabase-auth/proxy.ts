@@ -4,8 +4,9 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 import { getSupabaseAuthConfig } from "./config";
+import { LOGIN_PATH, safeNextPath } from "../amber-auth-redirect";
 
-export const LOGIN_PAGE = "/login";
+export const LOGIN_PAGE = LOGIN_PATH;
 
 // Strony dostępne bez logowania. Endpointy (/api) nie są przekierowywane – same zwracają 401.
 export function isPublicPath(pathname: string): boolean {
@@ -41,6 +42,9 @@ export async function updateSession(request: NextRequest) {
     const url = request.nextUrl.clone();
     url.pathname = LOGIN_PAGE;
     url.search = "";
+    // Standard: zapamiętujemy, dokąd ktoś chciał wejść (tylko adres wewnątrz aplikacji).
+    const next = safeNextPath(`${pathname}${request.nextUrl.search}`);
+    if (next && next !== "/") url.searchParams.set("next", next);
     const redirect = NextResponse.redirect(url);
     // Zachowujemy ciasteczka ustawione przy odświeżaniu (np. usunięcie wygasłej sesji).
     response.cookies.getAll().forEach((cookie) => redirect.cookies.set(cookie));

@@ -2,6 +2,7 @@
 // Uruchamianie: node --experimental-strip-types scripts/test-amber-auth.mjs
 import { readFileSync, existsSync } from "node:fs";
 import { AUTH_MESSAGES, AUTH_MIN_PASSWORD, authErrorMessage, isExistingAccountSignup, validateAuthInput } from "../lib/amber-auth-messages.ts";
+import { afterLoginPath, loginUrl, safeNextPath } from "../lib/amber-auth-redirect.ts";
 import { createAgentHandler } from "../lib/amber-agent.ts";
 import { createLatestConversationHandler, createConversationByIdHandler, createDeleteConversationHandler } from "../lib/amber-conversations.ts";
 import { createProfileApi } from "../lib/amber-profile.ts";
@@ -72,13 +73,37 @@ check("Serwer weryfikuje sesję przez getClaims (nie getSession)", auth.includes
 check("Proxy: getClaims, plik proxy.ts z funkcją proxy", read("lib/supabase-auth/proxy.ts").includes("auth.getClaims()") && read("proxy.ts").includes("export async function proxy"));
 check("Brak middleware.ts (Next.js 16 – proxy.ts)", !existsSync(new URL("../middleware.ts", import.meta.url)));
 const pages = ["app/page.tsx", "app/history/page.tsx", "app/profile/page.tsx", "app/upload/page.tsx", "app/dashboard/page.tsx"];
-check("Strony: bez logowania redirect na /login i dynamiczne", pages.every((p) => read(p).includes('if (!user) redirect("/login")') && read(p).includes('export const dynamic = "force-dynamic"')));
+check("Strony: bez logowania redirect na /login i dynamiczne", pages.every((p) => read(p).includes('if (!user) redirect(loginUrl(') && read(p).includes('export const dynamic = "force-dynamic"')));
 check("/login dynamiczna, zakładki „Zaloguj się” i „Załóż konto”", read("app/login/page.tsx").includes('export const dynamic = "force-dynamic"') &&
   read("app/login/auth-form.tsx").includes("Zaloguj się") && read("app/login/auth-form.tsx").includes("Załóż konto"));
 check("Czat: e-mail i „Wyloguj” przez Supabase", read("app/chat.tsx").includes("user-email") && read("app/chat.tsx").includes("Wyloguj") && read("app/chat.tsx").includes("auth.signOut()"));
 check("Wspólne hasło usunięte", !existsSync(new URL("../app/api/login/route.ts", import.meta.url)) && !existsSync(new URL("../app/login-form.tsx", import.meta.url)) &&
   ![...routes, ...pages, "lib/auth.ts"].some((p) => /CHAT_PASSWORD|SESSION_SECRET|SESSION_COOKIE/.test(read(p))));
 check("Przeglądarka dostaje tylko klucz publishable (bez SUPABASE_SECRET_KEY)", !read("lib/supabase-auth/config.ts").includes("SECRET") && !read("app/login/auth-form.tsx").includes("SECRET"));
+
+console.log("\n=== 4. Standard: powrót po zalogowaniu (tylko adresy wewnątrz aplikacji) ===");
+check("/upload → zapamiętany", safeNextPath("/upload") === "/upload" && loginUrl("/upload") === "/login?next=%2Fupload");
+check("Parametry zostają (/?c=12)", safeNextPath("/?c=12") === "/?c=12");
+check("Strona główna bez parametru", loginUrl("/") === "/login");
+check("Obca strona odrzucona (https://, //, \\, javascript:)", ["https://zla.strona", "//zla.strona", "/\\zla.strona", "javascript:alert(1)", "http:/zla"].every((v) => safeNextPath(v) === null));
+check("Znaki sterujące i za długi adres odrzucone", safeNextPath("/a\nb") === null && safeNextPath("/" + "a".repeat(600)) === null);
+check("Nie wracamy na /login ani do /api", safeNextPath("/login") === null && safeNextPath("/login?next=/x") === null && safeNextPath("/api/agent") === null);
+check("afterLoginPath: zły albo brak → czat", afterLoginPath(undefined) === "/" && afterLoginPath("https://zla.strona") === "/" && afterLoginPath(["/history", "/x"]) === "/history");
+const proxyFile = read("lib/supabase-auth/proxy.ts");
+check("Proxy dopisuje next przez safeNextPath", proxyFile.includes("safeNextPath(") && proxyFile.includes('searchParams.set("next", next)'));
+const loginPage = read("app/login/page.tsx");
+check("/login: next tylko przez afterLoginPath, zalogowany → redirect(next)", loginPage.includes("afterLoginPath(") && loginPage.includes("redirect(next)"));
+const form = read("app/login/auth-form.tsx");
+check("Formularz: po zalogowaniu window.location.replace(next)", form.includes("window.location.replace(next)"));
+check("Formularz: w trakcie zablokowane przyciski i pola, „Chwileczkę…”", form.includes("Chwileczkę…") && (form.match(/disabled=\{pending\}/g) ?? []).length >= 5);
+
+console.log("\n=== 5. Standard: wylogowanie i „Wstecz” ===");
+const chatFile = read("app/chat.tsx");
+const logout = chatFile.slice(chatFile.indexOf("async function handleLogout"), chatFile.indexOf("async function handleLogout") + 700);
+check("Wyloguj: czyści rozmowę, analizy i powitanie przed wylogowaniem", ["setMessages([])", "setAnalyses([])", "setGreeting(null)"].every((t) => logout.includes(t)) && logout.indexOf("setMessages([])") < logout.indexOf("signOut()"));
+check("Wyloguj: pełne przejście location.replace(\"/login\")", logout.includes('window.location.replace("/login")'));
+check("Strażnik „Wstecz” w layout (pageshow + persisted → reload)", read("app/layout.tsx").includes("<BackForwardGuard />") &&
+  read("app/back-forward-guard.tsx").includes("event.persisted") && read("app/back-forward-guard.tsx").includes("window.location.reload()"));
 
 console.log(`\nWynik: ${ok} zaliczonych, ${bad} niezaliczonych.`);
 process.exitCode = bad === 0 ? 0 : 1;

@@ -564,7 +564,7 @@ console.log("\n=== 12. Standard: strona /history i czat (kod źródłowy) ===");
   const byId = read("app/api/conversations/[id]/route.ts");
   check("/history: zalogowana osoba sprawdzana przed odczytem bazy", page.includes("await getCurrentUser()") &&
     page.indexOf("getCurrentUser()") < page.indexOf("getConversationStore()"));
-  check("/history: bez logowania przekierowanie na /login", page.includes('if (!user) redirect("/login")'));
+  check("/history: bez logowania przekierowanie na /login", page.includes('if (!user) redirect(loginUrl('));
   check("/history: kliknięcie otwiera rozmowę w czacie (/?c=numer)", page.includes("href={`/?c=${conversation.id}`}"));
   check("/history: tytuł, data i liczba wiadomości", page.includes("conversation.title") && page.includes("formatConversationDate") && page.includes("formatMessageCount"));
   check("/history: przycisk „Nowa rozmowa”", page.includes('href="/?new=1"') && page.includes("Nowa rozmowa"));

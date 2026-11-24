@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getCurrentUser } from "../../lib/auth";
+import { loginUrl } from "../../lib/amber-auth-redirect";
 import { KNOWLEDGE_MESSAGES, type DocumentSummary } from "../../lib/amber-knowledge";
 import { getKnowledgeStore } from "../../lib/supabase";
 import UploadForm from "./upload-form";
@@ -12,7 +13,7 @@ export const dynamic = "force-dynamic";
 export default async function UploadPage() {
   // Lekcja 7: zalogowana osoba (zweryfikowana sesja Supabase). Bez niej – strona logowania.
   const user = await getCurrentUser();
-  if (!user) redirect("/login");
+  if (!user) redirect(loginUrl("/upload"));
 
   let documents: DocumentSummary[] = [];
   let problem: string | null = null;

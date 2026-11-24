@@ -398,7 +398,7 @@ console.log("\n=== 10. Standard: czat i strona /profile (kod źródłowy) ===");
   check("Czat: powitanie w pustej rozmowie (tylko na ekranie)", ui.includes('className="message assistant greeting"') && ui.includes("fetch(PROFILE_API"));
   check("Czat: po „Nowa rozmowa” powitanie wczytywane od nowa (nowe imię)", /handleNewConversation\(\)[\s\S]*?void loadGreeting\(\);\s*\}/.test(ui));
   check("Powitanie nie trafia do historii (nie przez setMessages/sendChat)", !ui.includes("setMessages([{") && !/sendChat\(\{ text: greeting/.test(ui));
-  check("/profile: zalogowana osoba przed odczytem bazy, bez logowania /login", page.includes("await getCurrentUser()") && page.indexOf("getCurrentUser()") < page.indexOf("getProfileStore()") && page.includes('if (!user) redirect("/login")'));
+  check("/profile: zalogowana osoba przed odczytem bazy, bez logowania /login", page.includes("await getCurrentUser()") && page.indexOf("getCurrentUser()") < page.indexOf("getProfileStore()") && page.includes('if (!user) redirect(loginUrl('));
   check("/profile: komponent serwerowy bez klucza", !page.includes('"use client"') && !page.includes("SUPABASE_"));
   check("Edytor: poprawianie, usuwanie, dodawanie i czyszczenie przez /api/profile", editor.includes("PROFILE_API") && editor.includes('"PATCH"') &&
     editor.includes('{ pozycja: key }') && editor.includes('{ imie: true }') && editor.includes("{ wszystko: true }"));

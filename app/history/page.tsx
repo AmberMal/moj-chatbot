@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getCurrentUser } from "../../lib/auth";
+import { loginUrl } from "../../lib/amber-auth-redirect";
 import {
   HISTORY_EMPTY_MESSAGE,
   deleteConfirmMessage,
@@ -18,7 +19,7 @@ export const dynamic = "force-dynamic";
 export default async function HistoryPage() {
   // Lekcja 7: zalogowana osoba (zweryfikowana sesja Supabase). Bez niej – strona logowania.
   const user = await getCurrentUser();
-  if (!user) redirect("/login");
+  if (!user) redirect(loginUrl("/history"));
 
   let conversations: ConversationSummary[] = [];
   let problem: string | null = null;
