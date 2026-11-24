@@ -9,6 +9,7 @@ import {
   AGENT_API,
   HISTORY_LOAD_ERROR,
   HISTORY_LOADING_MESSAGE,
+  HISTORY_NOT_FOUND,
   HISTORY_PAGE,
   LATEST_CONVERSATION_API,
   NEW_CONVERSATION_URL,
@@ -148,7 +149,7 @@ export default function Chat({ email }: { email: string }) {
   const setMessagesRef = useRef<((update: (messages: UIMessage[]) => UIMessage[]) => void) | null>(null);
   // Lekcja 5, Warsztat 2: numer bieżącej rozmowy w bazie (null = nowa rozmowa) i wczytywanie ostatniej rozmowy po F5.
   const conversationIdRef = useRef<number | null>(null);
-  const [historyStatus, setHistoryStatus] = useState<"loading" | "ready" | "error">("loading");
+  const [historyStatus, setHistoryStatus] = useState<"loading" | "ready" | "error" | "not-found">("loading");
   // Lekcja 5, Warsztat 3 (Standard): powitanie w pustej rozmowie (z imieniem z profilu). Tylko na ekranie – nie trafia do historii.
   const [greeting, setGreeting] = useState<string | null>(null);
   // useChat wysyła historię rozmowy do /api/agent (mode=chat) i odbiera odpowiedź strumieniowo.
@@ -202,7 +203,8 @@ export default function Chat({ email }: { email: string }) {
         if (!response.ok) {
           // Nie ma takiej rozmowy / błąd: zaczynamy nową, adres nie wskazuje już starej rozmowy.
           if (target.kind === "id") window.history.replaceState(null, "", NEW_CONVERSATION_URL);
-          setHistoryStatus(response.status === 401 ? "ready" : "error");
+          // Lekcja 7: cudza albo nieistniejąca rozmowa → „Nie znaleziono”, bez żadnych danych.
+          setHistoryStatus(response.status === 401 ? "ready" : response.status === 404 ? "not-found" : "error");
           return;
         }
         const data = readLatestConversation(await response.json().catch(() => null));
@@ -592,6 +594,11 @@ export default function Chat({ email }: { email: string }) {
       {historyStatus === "error" && (
         <p className="error" role="alert">
           {HISTORY_LOAD_ERROR}
+        </p>
+      )}
+      {historyStatus === "not-found" && (
+        <p className="error" role="alert">
+          {HISTORY_NOT_FOUND}
         </p>
       )}
 

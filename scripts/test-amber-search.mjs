@@ -163,9 +163,9 @@ check("analiza: fakty zostają (bez narzędzi)", AMBER_ANALYZE_INSTRUCTIONS.incl
 // --- endpoint: narzędzie tylko po sesji ---
 const route = readFileSync("app/api/agent/route.ts", "utf8");
 check("route: searchKnowledge w narzędziach", route.includes("tools.searchKnowledge = searchKnowledgeTool"));
-check("route: narzędzie tworzone w createModels (po sesji)", route.indexOf("getSession:") < route.indexOf("createModels:") && route.indexOf("createModels:") < route.indexOf("getSearchKnowledgeTool()"));
+check("route: narzędzie dodawane w createModels (po sesji), z klienta zalogowanej osoby", route.indexOf("getSession:") < route.indexOf("createModels:") && route.indexOf("createModels:") < route.indexOf("userStores.searchKnowledgeTool"));
 const supa = readFileSync("lib/supabase.ts", "utf8");
-check("supabase: ten sam model embeddingów co import", supa.includes("getSearchKnowledgeTool") && (supa.match(/getEmbedder\(\)/g) ?? []).length >= 2);
+check("supabase: ten sam model embeddingów co import (jeden getEmbedder dla zapisu i wyszukiwania)", supa.includes("const embed = getEmbedder();") && supa.includes("createSupabaseKnowledgeDb(userClient), embed)") && supa.includes("createSearchKnowledgeTool({ embed,"));
 
 console.log(`\nWynik: ${passed} zaliczonych, ${failed} niezaliczonych.`);
 if (failed) process.exit(1);

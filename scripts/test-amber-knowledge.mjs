@@ -368,7 +368,7 @@ const route = readFileSync("app/api/upload/route.ts", "utf8");
 check("route: sprawdza zalogowaną osobę", route.includes("getSession: () => getApiSession()"));
 check("route: GET, POST, DELETE", ["GET", "POST", "DELETE"].every((m) => route.includes(`export async function ${m}`)));
 const page = readFileSync("app/upload/page.tsx", "utf8");
-check("strona: bez logowania przekierowanie na /login", page.includes("await getCurrentUser()") && page.includes('if (!user) redirect(loginUrl(') && page.indexOf("getCurrentUser()") < page.indexOf("getKnowledgeStore()"));
+check("strona: bez logowania przekierowanie na /login", page.includes("await getCurrentUser()") && page.includes('if (!user) redirect(loginUrl(') && page.indexOf("getCurrentUser()") < page.indexOf("getUserKnowledgeStore()"));
 check("strona: lista dopiero po sesji", page.indexOf("if (loggedIn)") < page.indexOf("listDocuments()"));
 const form = readFileSync("app/upload/upload-form.tsx", "utf8");
 check("formularz: pola i przycisk", />\s*Tytuł\s*</.test(form) && />\s*Treść\s*</.test(form) && form.includes("Dodaj do bazy wiedzy"));

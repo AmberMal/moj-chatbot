@@ -249,7 +249,10 @@ export type AgentStats = { kroki: number; narzedzia: number; czasMs: number };
 const MAX_STREAM_SOURCES = 6;
 
 export const AGENT_MESSAGES = {
-  unauthorized: "Brak dostępu: zaloguj się hasłem warsztatowym.",
+  // Lekcja 7: cudza (RLS) albo nieistniejąca rozmowa – ten sam komunikat co przy otwieraniu rozmowy.
+  conversationNotFound: "Nie znaleziono tej rozmowy.",
+  conversationCheckError: "Nie udało się sprawdzić rozmowy. Spróbuj ponownie za chwilę.",
+  unauthorized: "Brak dostępu: zaloguj się na swoje konto.",
   badRequest: "Nieprawidłowe zapytanie. Odśwież stronę i spróbuj ponownie.",
   badMode: "Nieprawidłowy tryb (mode). Dozwolone wartości: chat, analyze.",
   config:
@@ -560,6 +563,20 @@ export function createAgentHandler(deps: AgentDeps) {
         return text(history.message, 400);
       }
       turns = history.turns;
+      // Lekcja 7, Warsztat 2 (Standard): zapis do cudzej albo nieistniejącej rozmowy → 404, zanim wywołamy model.
+      // RLS sprawia, że rozmowa innej osoby „nie istnieje” dla zalogowanej osoby.
+      if (conversationId !== null) {
+        const store = deps.conversations?.() ?? null;
+        if (store?.exists) {
+          try {
+            if (!(await store.exists(conversationId))) return text(AGENT_MESSAGES.conversationNotFound, 404);
+          } catch (error) {
+            const details = error instanceof Error ? error.message : String(error);
+            console.error(`[Amber] /api/agent – sprawdzenie rozmowy: ${details.slice(0, 300)}`);
+            return text(AGENT_MESSAGES.conversationCheckError, 502);
+          }
+        }
+      }
     }
 
     // 3. Konfiguracja modelu (klucz i model tylko po stronie serwera).

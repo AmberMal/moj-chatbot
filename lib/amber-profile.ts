@@ -252,7 +252,7 @@ export function profileInstructions(profile: Profile): string {
 // ---------------------------------------------------------------------------
 
 export const PROFILE_MESSAGES = {
-  unauthorized: "Brak dostępu: zaloguj się hasłem warsztatowym.",
+  unauthorized: "Brak dostępu: zaloguj się na swoje konto.",
   badRequest: "Nieprawidłowe zapytanie.",
   notConfigured: "Baza profilu nie jest skonfigurowana.",
   dbError: "Nie udało się zapisać zmian w profilu. Spróbuj ponownie za chwilę.",

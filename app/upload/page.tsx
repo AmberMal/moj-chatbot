@@ -3,7 +3,7 @@ import { redirect } from "next/navigation";
 import { getCurrentUser } from "../../lib/auth";
 import { loginUrl } from "../../lib/amber-auth-redirect";
 import { KNOWLEDGE_MESSAGES, type DocumentSummary } from "../../lib/amber-knowledge";
-import { getKnowledgeStore } from "../../lib/supabase";
+import { getUserKnowledgeStore } from "../../lib/supabase";
 import UploadForm from "./upload-form";
 
 // Lekcja 6, Warsztat 2: strona do wklejania dokumentów do bazy wiedzy + lista dokumentów (Standard).
@@ -17,7 +17,7 @@ export default async function UploadPage() {
 
   let documents: DocumentSummary[] = [];
   let problem: string | null = null;
-  const store = getKnowledgeStore();
+  const store = await getUserKnowledgeStore();
   if (!store) {
     problem = KNOWLEDGE_MESSAGES.notConfigured;
   } else {

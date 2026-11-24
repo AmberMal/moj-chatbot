@@ -152,6 +152,7 @@ export function conversationFromSearch(search: string): ConversationTarget {
   return { kind: "latest" };
 }
 export const HISTORY_LOADING_MESSAGE = "Wczytuję rozmowę…";
+export const HISTORY_NOT_FOUND = "Nie znaleziono tej rozmowy. Możesz pisać dalej – zacznie się nowa rozmowa.";
 export const HISTORY_LOAD_ERROR = "Nie udało się wczytać poprzedniej rozmowy. Możesz pisać dalej – zacznie się nowa rozmowa.";
 
 // Numer rozmowy z metadanych odpowiedzi Amber (serwer dodaje go po zapisie w bazie).

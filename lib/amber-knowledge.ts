@@ -32,6 +32,7 @@ export const KNOWLEDGE_MESSAGES = {
   listError: "Nie udało się wczytać listy dokumentów. Odśwież stronę za chwilę.",
   deleteError: "Nie udało się usunąć dokumentu. Spróbuj ponownie za chwilę.",
   deleted: "Usunięto dokument.",
+  notFound: "Nie znaleziono tego dokumentu.",
   connection: "Brak połączenia z serwerem. Spróbuj ponownie.",
 } as const;
 
@@ -179,7 +180,8 @@ export type ChunkRow = { document_id: number; chunk_index: number; content: stri
 export type KnowledgeDb = {
   insertDocument(title: string): Promise<number>;
   insertChunks(rows: ChunkRow[]): Promise<void>;
-  deleteDocument(id: number): Promise<void>;
+  // Lekcja 7: false = nic nie usunięto (nie ma takiego dokumentu albo należy do innej osoby – RLS).
+  deleteDocument(id: number): Promise<boolean | void>;
   findChunksWithoutEmbedding(limit: number): Promise<{ id: number; document_id: number; content: string }[]>;
   updateEmbedding(id: number, embedding: number[]): Promise<void>;
   listDocuments(): Promise<DocumentSummary[]>;
@@ -196,7 +198,8 @@ export type KnowledgeStore = {
   ): Promise<SaveResult>;
   listDocuments(): Promise<DocumentSummary[]>;
   hasTitle(title: string): Promise<boolean>;
-  deleteDocument(id: number): Promise<void>;
+  // Lekcja 7: false = nic nie usunięto (nie ma takiego dokumentu albo należy do innej osoby – RLS).
+  deleteDocument(id: number): Promise<boolean | void>;
 };
 
 // Błąd z etapem – endpoint wybiera po nim komunikat dla użytkownika.
@@ -303,8 +306,9 @@ export function createSupabaseKnowledgeDb(client: SupabaseClient): KnowledgeDb {
       if (error) throw dbError("fragmenty", error);
     },
     async deleteDocument(id) {
-      const { error } = await client.from("documents").delete().eq("id", id);
+      const { data, error } = await client.from("documents").delete().eq("id", id).select("id");
       if (error) throw dbError("usunięcie dokumentu", error);
+      return Array.isArray(data) && data.length > 0;
     },
     async findChunksWithoutEmbedding(limit) {
       const { data, error } = await client
@@ -358,7 +362,7 @@ export type UploadEvent =
 
 export function createUploadApi(deps: {
   getSession: (req: Request) => unknown | Promise<unknown>;
-  getStore: () => KnowledgeStore | null;
+  getStore: () => KnowledgeStore | null | Promise<KnowledgeStore | null>;
 }) {
   const headers = { "Cache-Control": "no-store" };
   const json = (data: unknown, status = 200) => Response.json(data, { status, headers });
@@ -377,7 +381,7 @@ export function createUploadApi(deps: {
   return {
     async GET(req: Request): Promise<Response> {
       if (!(await deps.getSession(req))) return json({ komunikat: KNOWLEDGE_MESSAGES.unauthorized }, 401);
-      const store = deps.getStore();
+      const store = await deps.getStore();
       if (!store) return json({ komunikat: KNOWLEDGE_MESSAGES.notConfigured }, 503);
       try {
         return json({ dokumenty: await store.listDocuments() });
@@ -392,10 +396,11 @@ export function createUploadApi(deps: {
       const body = (await readBody(req)) as { id?: unknown } | null;
       const id = body && typeof body === "object" ? body.id : undefined;
       if (typeof id !== "number" || !Number.isInteger(id) || id <= 0) return json({ komunikat: KNOWLEDGE_MESSAGES.badRequest }, 400);
-      const store = deps.getStore();
+      const store = await deps.getStore();
       if (!store) return json({ komunikat: KNOWLEDGE_MESSAGES.notConfigured }, 503);
       try {
-        await store.deleteDocument(id);
+        const deleted = await store.deleteDocument(id);
+        if (deleted === false) return json({ komunikat: KNOWLEDGE_MESSAGES.notFound }, 404);
         return json({ komunikat: KNOWLEDGE_MESSAGES.deleted, dokumenty: await store.listDocuments() });
       } catch (error) {
         logError("DELETE", error);
@@ -411,7 +416,7 @@ export function createUploadApi(deps: {
       if (!check.ok) return json({ komunikat: check.komunikat }, 400);
       const replace = (body as { zastap?: unknown }).zastap === true;
       const mode: SplitMode = (body as { podzial?: unknown }).podzial === "kawalki" ? "kawalki" : "akapity";
-      const store = deps.getStore();
+      const store = await deps.getStore();
       if (!store) return json({ komunikat: KNOWLEDGE_MESSAGES.notConfigured }, 503);
       // Ten sam tytuł bez potwierdzenia – pytamy, zanim cokolwiek zrobimy.
       if (!replace) {

@@ -107,9 +107,10 @@ check("Strażnik „Wstecz” w layout (pageshow + persisted → reload)", read(
 
 console.log("\n=== 6. Warsztat 2: dane każdej osoby osobno (RLS) ===");
 const supa = read("lib/supabase.ts");
-const userPart = supa.slice(supa.indexOf("export function createUserStores"), supa.indexOf("export function getKnowledgeStore"));
+const userPart = supa.slice(supa.indexOf("export function createUserStores"));
 check("Rozmowy i profil: klient zalogowanej osoby (createSupabaseServerClient), nie klucz secret", userPart.includes("createSupabaseServerClient()") && !userPart.includes("getSupabase()"));
-check("Baza wiedzy dalej kluczem secret (getSupabase)", /getKnowledgeStore[\s\S]*?getSupabase\(\)/.test(supa) && /getSearchKnowledgeTool[\s\S]*?getSupabase\(\)/.test(supa));
+check("Standard: baza wiedzy i searchKnowledge też klientem zalogowanej osoby", userPart.includes("createKnowledgeStore(createSupabaseKnowledgeDb(userClient)") && userPart.includes("createSupabaseMatchChunks(userClient)") &&
+  !/getKnowledgeStore|getSearchKnowledgeTool/.test(supa) && read("app/api/upload/route.ts").includes("getUserKnowledgeStore") && read("app/upload/page.tsx").includes("getUserKnowledgeStore"));
 check("Stare magazyny na kluczu secret usunięte", !supa.includes("export function getConversationStore") && !supa.includes("export function getProfileStore"));
 const convFile = read("lib/amber-conversations.ts"), profFile = read("lib/amber-profile.ts");
 check("Aplikacja nie wysyła user_id (wpisuje go baza)", !/user_id/.test(convFile) && !/user_id/.test(profFile));

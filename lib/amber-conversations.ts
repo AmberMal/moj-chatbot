@@ -28,7 +28,7 @@ export const MAX_STORED_USER_CHARS = 4000;
 export const MAX_LISTED_CONVERSATIONS = 100;
 
 export const CONVERSATION_MESSAGES = {
-  unauthorized: "Brak dostępu: zaloguj się hasłem warsztatowym.",
+  unauthorized: "Brak dostępu: zaloguj się na swoje konto.",
   loadError: "Nie udało się wczytać rozmowy z bazy. Odśwież stronę za chwilę.",
   badId: "Nieprawidłowy numer rozmowy.",
   notFound: "Nie znaleziono tej rozmowy.",
@@ -94,6 +94,8 @@ export function unansweredUserTurns(turns: ChatTurn[]): ChatTurn[] {
 
 export type ConversationStore = {
   // Zwraca numer rozmowy, do której zapisano wiadomości.
+  // Lekcja 7: czy rozmowa istnieje i należy do zalogowanej osoby (RLS) – przed wywołaniem modelu.
+  exists?: (conversationId: number) => Promise<boolean>;
   saveExchange: (input: { conversationId: number | null; turns: ChatTurn[]; replyText: string; generatedImage: boolean }) => Promise<number>;
   loadLatest: () => Promise<{ conversationId: number; messages: StoredMessage[] } | null>;
   // Warsztat 2 (Standard): wybrana rozmowa (null = nie ma takiej) i lista rozmów (najnowsze na górze).
@@ -107,6 +109,7 @@ export type ConversationStore = {
 
 export function createConversationStore(db: ConversationDb): ConversationStore {
   return {
+    exists: (conversationId) => db.conversationExists(conversationId),
     async saveExchange({ conversationId, turns, replyText, generatedImage }) {
       const users = unansweredUserTurns(turns).map(userTextForStorage);
       let id = conversationId;

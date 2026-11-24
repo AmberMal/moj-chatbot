@@ -1,7 +1,8 @@
 // Lekcja 5, Warsztat 2: połączenie z bazą Supabase – TYLKO po stronie serwera.
 // Lekcja 7, Warsztat 2: rozmowy, wiadomości i profil – klientem ZALOGOWANEJ osoby (klucz publishable + sesja
 // z ciasteczek), więc bazy pilnuje RLS („tylko własne wiersze”), a user_id wpisuje sama baza (auth.uid()).
-// Baza wiedzy (documents, chunks, match_chunks) – nadal wspólna, kluczem secret.
+// Lekcja 7, Warsztat 2 (Standard): baza wiedzy (documents, chunks, match_chunks) też osobno dla każdego konta –
+// klientem zalogowanej osoby; match_chunks działa z uprawnieniami wywołującego, więc RLS zwraca tylko jej fragmenty.
 // Klucz secret (SUPABASE_SECRET_KEY) omija RLS, dlatego nigdy nie może trafić do przeglądarki:
 // ten plik importują wyłącznie pliki serwerowe (app/api/...), a nazwy zmiennych nie mają przedrostka NEXT_PUBLIC_.
 // Brak zmiennych = null: czat działa dalej, tylko bez zapisu rozmów (wpis w logu serwera).
@@ -20,6 +21,8 @@ import { createSupabaseServerClient } from "./supabase-auth/server";
 
 let cached: SupabaseClient | null = null;
 
+// Klient z kluczem secret (omija RLS). Od lekcji 7 aplikacja NIE używa go do danych osób (rozmowy, profil, baza wiedzy).
+
 export function getSupabase(): SupabaseClient | null {
   if (typeof window !== "undefined") throw new Error("lib/supabase.ts działa tylko na serwerze.");
   if (cached) return cached;
@@ -36,11 +39,18 @@ export function getSupabase(): SupabaseClient | null {
 export function createUserStores(userClient: SupabaseClient | null): {
   conversations: ConversationStore | null;
   profile: ProfileStore | null;
+  knowledge: KnowledgeStore | null;
+  searchKnowledgeTool: ReturnType<typeof createSearchKnowledgeTool> | null;
 } {
-  if (!userClient) return { conversations: null, profile: null };
+  if (!userClient) return { conversations: null, profile: null, knowledge: null, searchKnowledgeTool: null };
+  const embed = getEmbedder();
   return {
     conversations: createConversationStore(createSupabaseConversationDb(userClient)),
     profile: createProfileStore(createSupabaseProfileDb(userClient)),
+    // Brak modelu embeddingów zgłasza sam zapis (komunikat po polsku).
+    knowledge: createKnowledgeStore(createSupabaseKnowledgeDb(userClient), embed),
+    // Narzędzie agenta searchKnowledge (null = brak modelu embeddingów).
+    searchKnowledgeTool: embed ? createSearchKnowledgeTool({ embed, matchChunks: createSupabaseMatchChunks(userClient) }) : null,
   };
 }
 
@@ -55,16 +65,7 @@ export async function getUserProfileStore(): Promise<ProfileStore | null> {
   return createUserStores(await createSupabaseServerClient()).profile;
 }
 
-// Lekcja 6, Warsztat 2: baza wiedzy – dokumenty, fragmenty i ich embeddingi (lib/amber-knowledge.ts).
-// null = brak konfiguracji Supabase. Brak modelu embeddingów zgłasza sam zapis (komunikat po polsku).
-export function getKnowledgeStore(): KnowledgeStore | null {
-  const client = getSupabase();
-  return client ? createKnowledgeStore(createSupabaseKnowledgeDb(client), getEmbedder()) : null;
-}
-
-// Lekcja 6, Warsztat 3: narzędzie agenta searchKnowledge. null = brak Supabase albo modelu embeddingów.
-export function getSearchKnowledgeTool() {
-  const client = getSupabase();
-  const embed = getEmbedder();
-  return client && embed ? createSearchKnowledgeTool({ embed, matchChunks: createSupabaseMatchChunks(client) }) : null;
+// Lekcja 6 → 7: baza wiedzy zalogowanej osoby (dokumenty, fragmenty, embeddingi; RLS). null = brak konfiguracji.
+export async function getUserKnowledgeStore(): Promise<KnowledgeStore | null> {
+  return createUserStores(await createSupabaseServerClient()).knowledge;
 }

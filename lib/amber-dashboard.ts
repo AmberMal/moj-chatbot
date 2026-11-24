@@ -85,7 +85,7 @@ export type DashboardDeps = {
 };
 
 export const DASHBOARD_MESSAGES = {
-  unauthorized: "Brak dostępu: zaloguj się hasłem warsztatowym.",
+  unauthorized: "Brak dostępu: zaloguj się na swoje konto.",
   badRequest: "Nieprawidłowe zapytanie. Odśwież stronę i spróbuj ponownie.",
   noCity: "Wpisz miasto (od 1 do 100 znaków).",
   badDate: "Podaj datę w formacie RRRR-MM-DD.",

@@ -26,7 +26,7 @@ import {
   signAgentChatTurn,
 } from "../../../lib/amber-history";
 import { createAgentHandler } from "../../../lib/amber-agent";
-import { createUserStores, getSearchKnowledgeTool } from "../../../lib/supabase";
+import { createUserStores } from "../../../lib/supabase";
 import { createSupabaseServerClient } from "../../../lib/supabase-auth/server";
 import { createProfileTool, profileInstructions } from "../../../lib/amber-profile";
 
@@ -89,7 +89,7 @@ export async function POST(req: Request) {
       const profileStore = userStores.profile;
       if (profileStore) tools.zapiszProfil = createProfileTool(profileStore);
       // Lekcja 6, Warsztat 3: wyszukiwanie w bazie wiedzy (embedding pytania + match_chunks w Supabase).
-      const searchKnowledgeTool = getSearchKnowledgeTool();
+      const searchKnowledgeTool = userStores.searchKnowledgeTool;
       if (searchKnowledgeTool) tools.searchKnowledge = searchKnowledgeTool;
       if (DEV_DIAGNOSTICS) {
         // Tylko przy npm run dev. Zwraca „konfiguracja kompletna: tak/nie” – bez nazw zmiennych i wartości.

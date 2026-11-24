@@ -696,10 +696,12 @@ console.log("\n=== 14. Dla szybkich: usuwanie rozmowy (DELETE /api/conversations
   check("Błąd bazy → 502 po polsku, bez szczegółów", r.status === 502 && body === CONVERSATION_MESSAGES.deleteError && !body.includes("42501"));
   const none = createDeleteConversationHandler({ getSession: () => ({ secret: AUTH.secret, token: TOKEN }), getStore: () => null });
   check("Brak konfiguracji bazy → 503", (await none(delRequest("2"), "2")).status === 503);
-  // Wysłanie wiadomości do usuniętej rozmowy → nowa rozmowa (zamiast błędu).
-  const { handle } = handler({ model: chatModel([[...textChunks("Nowa"), stop]]), store });
-  const { message } = await readChat(await handle(request({ mode: "chat", conversationId: 1, messages: [user("u1", "Po usunięciu")] })));
-  check("Wiadomość do usuniętej rozmowy → nowa rozmowa", message.metadata?.conversationId === 3 && db.conversations.some((c) => c.id === 3));
+  // Lekcja 7: wysłanie wiadomości do usuniętej (albo cudzej – RLS) rozmowy → 404 „Nie znaleziono”, model nie jest wywołany.
+  const deletedModel = chatModel([[...textChunks("Nowa"), stop]]);
+  const { handle } = handler({ model: deletedModel, store });
+  const rDeleted = await handle(request({ mode: "chat", conversationId: 1, messages: [user("u1", "Po usunięciu")] }));
+  check("Wiadomość do usuniętej/cudzej rozmowy → 404 „Nie znaleziono”, bez modelu i bez nowego zapisu",
+    rDeleted.status === 404 && (await rDeleted.text()) === "Nie znaleziono tej rozmowy." && deletedModel.doStreamCalls.length === 0 && !db.conversations.some((c) => c.id === 3));
   check("Pytanie przed usunięciem z tytułem", deleteConfirmMessage("Wycena alarmu") === "Usunąć rozmowę „Wycena alarmu”? Tej operacji nie można cofnąć.");
 }
 {
