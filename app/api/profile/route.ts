@@ -1,6 +1,6 @@
 import { getApiSession } from "../../../lib/auth";
 import { createProfileApi } from "../../../lib/amber-profile";
-import { getProfileStore } from "../../../lib/supabase";
+import { getUserProfileStore } from "../../../lib/supabase";
 
 // Lekcja 5, Warsztat 3 (Standard): profil klienta dla strony /profile i powitania w czacie.
 // GET – podgląd, PATCH – popraw / dodaj, DELETE – usuń pozycję, imię albo cały profil.
@@ -10,7 +10,8 @@ export const dynamic = "force-dynamic";
 const api = createProfileApi({
   // Zalogowana osoba (zweryfikowana sesja Supabase) – bez niej 401, zanim dotkniemy bazy.
   getSession: () => getApiSession(),
-  getStore: getProfileStore,
+  // Lekcja 7: profil zalogowanej osoby (klient jej sesji, RLS).
+  getStore: getUserProfileStore,
 });
 
 export async function GET(req: Request) {

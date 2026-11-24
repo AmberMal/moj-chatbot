@@ -1,7 +1,7 @@
 import { getApiSession } from "../../../../lib/auth";
 import { deriveHistoryKey, historySessionId, signAgentChatTurn } from "../../../../lib/amber-history";
 import { createLatestConversationHandler } from "../../../../lib/amber-conversations";
-import { getConversationStore } from "../../../../lib/supabase";
+import { getUserConversationStore } from "../../../../lib/supabase";
 
 // Lekcja 5, Warsztat 2: ostatnia rozmowa z bazy (po odświeżeniu strony).
 // 1. Najpierw sesja – bez niej 401, zanim cokolwiek zostanie odczytane z bazy.
@@ -12,7 +12,7 @@ export const dynamic = "force-dynamic";
 const handle = createLatestConversationHandler({
   // Zalogowana osoba (zweryfikowana sesja Supabase) – bez niej 401.
   getSession: () => getApiSession(),
-  getStore: getConversationStore,
+  getStore: getUserConversationStore,
   sign: (session, history) =>
     signAgentChatTurn(deriveHistoryKey(session.secret), historySessionId(session.token), history, {}),
 });

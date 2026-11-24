@@ -435,7 +435,7 @@ console.log("\n=== 7. Bezpieczeństwo i interfejs (kod źródłowy) ===");
     ![ui, client, supabase, latest, agentRoute].some((f) => f.includes("NEXT_PUBLIC_SUPABASE")));
   check("lib/supabase.ts odmawia działania w przeglądarce", supabase.includes('typeof window !== "undefined"'));
   check("Endpoint latest sprawdza zalogowaną osobę (getApiSession) przed bazą", latest.includes("getSession: () => getApiSession()") && latest.includes("createLatestConversationHandler"));
-  check("Agent dostaje zapis rozmów (conversations: getConversationStore)", agentRoute.includes("conversations: getConversationStore"));
+  check("Agent dostaje zapis rozmów zalogowanej osoby (conversations: () => userStores.conversations)", agentRoute.includes("conversations: () => userStores.conversations"));
   check("Przycisk „Nowa rozmowa” w czacie", ui.includes("Nowa rozmowa") && ui.includes("onClick={handleNewConversation}"));
   check("„Nowa rozmowa” nie kasuje niczego w bazie (bez fetch/DELETE)", !/handleNewConversation\(\)\s*\{[^}]*fetch/.test(ui) && !ui.includes('"DELETE"'));
   check("Po otwarciu strony czat wczytuje ostatnią rozmowę", ui.includes(": LATEST_CONVERSATION_API") && ui.includes("fetch(url") && ui.includes("setMessages(data.messages)"));
@@ -563,7 +563,7 @@ console.log("\n=== 12. Standard: strona /history i czat (kod źródłowy) ===");
   const ui = read("app/chat.tsx");
   const byId = read("app/api/conversations/[id]/route.ts");
   check("/history: zalogowana osoba sprawdzana przed odczytem bazy", page.includes("await getCurrentUser()") &&
-    page.indexOf("getCurrentUser()") < page.indexOf("getConversationStore()"));
+    page.indexOf("getCurrentUser()") < page.indexOf("getUserConversationStore()"));
   check("/history: bez logowania przekierowanie na /login", page.includes('if (!user) redirect(loginUrl('));
   check("/history: kliknięcie otwiera rozmowę w czacie (/?c=numer)", page.includes("href={`/?c=${conversation.id}`}"));
   check("/history: tytuł, data i liczba wiadomości", page.includes("conversation.title") && page.includes("formatConversationDate") && page.includes("formatMessageCount"));

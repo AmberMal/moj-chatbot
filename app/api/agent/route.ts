@@ -26,7 +26,8 @@ import {
   signAgentChatTurn,
 } from "../../../lib/amber-history";
 import { createAgentHandler } from "../../../lib/amber-agent";
-import { getConversationStore, getProfileStore, getSearchKnowledgeTool } from "../../../lib/supabase";
+import { createUserStores, getSearchKnowledgeTool } from "../../../lib/supabase";
+import { createSupabaseServerClient } from "../../../lib/supabase-auth/server";
 import { createProfileTool, profileInstructions } from "../../../lib/amber-profile";
 
 // Warsztat 3: jeden endpoint, dwa tryby (mode=chat, mode=analyze). Logika: lib/amber-agent.ts.
@@ -35,6 +36,9 @@ import { createProfileTool, profileInstructions } from "../../../lib/amber-profi
 const DEV_DIAGNOSTICS = process.env.NODE_ENV === "development";
 
 export async function POST(req: Request) {
+  // Lekcja 7, Warsztat 2: rozmowy i profil – klientem zalogowanej osoby (sesja z ciasteczek, RLS).
+  // Samo utworzenie klienta nie czyta bazy; pierwsze zapytanie do bazy dopiero po sprawdzeniu sesji (getSession).
+  const userStores = createUserStores(await createSupabaseServerClient());
   const handle = createAgentHandler({
     // 1. Zalogowana osoba – sprawdzana jako pierwsza (zweryfikowana sesja Supabase; bez niej 401).
     getSession: () => getApiSession(),
@@ -82,7 +86,7 @@ export async function POST(req: Request) {
         notatki: createNotesTool(sessionId),
       };
       // Lekcja 5, Warsztat 3: zapis faktów o kliencie w user_profiles (tylko gdy Supabase jest skonfigurowany).
-      const profileStore = getProfileStore();
+      const profileStore = userStores.profile;
       if (profileStore) tools.zapiszProfil = createProfileTool(profileStore);
       // Lekcja 6, Warsztat 3: wyszukiwanie w bazie wiedzy (embedding pytania + match_chunks w Supabase).
       const searchKnowledgeTool = getSearchKnowledgeTool();
@@ -99,10 +103,10 @@ export async function POST(req: Request) {
     generateAmberOutput,
     maxTextChars: MAX_USER_MESSAGE_CHARS,
     // Lekcja 5, Warsztat 2: zapis rozmów w Supabase (po sprawdzeniu sesji i po zakończeniu odpowiedzi).
-    conversations: getConversationStore,
+    conversations: () => userStores.conversations,
     // Lekcja 5, Warsztat 3: profil klienta jako dane w instrukcjach (przed każdą odpowiedzią).
     profileInstructions: async () => {
-      const store = getProfileStore();
+      const store = userStores.profile;
       return store ? profileInstructions(await store.load()) : "";
     },
     // Dla szybkich: tytuł nowej rozmowy od modelu – po wysłaniu odpowiedzi (after z Next.js; błąd tylko w logu).

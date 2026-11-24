@@ -3,7 +3,7 @@ import { redirect } from "next/navigation";
 import { getCurrentUser } from "../../lib/auth";
 import { loginUrl } from "../../lib/amber-auth-redirect";
 import type { Profile } from "../../lib/amber-profile";
-import { getProfileStore } from "../../lib/supabase";
+import { getUserProfileStore } from "../../lib/supabase";
 import ProfileEditor from "./profile-editor";
 
 // Lekcja 5, Warsztat 3 (Standard): profil klienta – podgląd, poprawianie, usuwanie, czyszczenie.
@@ -17,7 +17,7 @@ export default async function ProfilePage() {
 
   let profile: Profile | null = null;
   let problem: string | null = null;
-  const store = getProfileStore();
+  const store = await getUserProfileStore();
   if (!store) {
     problem = "Baza profilu nie jest skonfigurowana. Uzupełnij dane Supabase w .env.local i uruchom ponownie serwer.";
   } else {

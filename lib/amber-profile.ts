@@ -260,7 +260,7 @@ export const PROFILE_MESSAGES = {
 
 export function createProfileApi(deps: {
   getSession: (req: Request) => unknown | Promise<unknown>;
-  getStore: () => ProfileStore | null;
+  getStore: () => ProfileStore | null | Promise<ProfileStore | null>;
 }) {
   const headers = { "Cache-Control": "no-store" };
   const plain = (message: string, status: number) =>
@@ -270,7 +270,7 @@ export function createProfileApi(deps: {
 
   async function guarded(req: Request, label: string, run: (store: ProfileStore) => Promise<Response>): Promise<Response> {
     if (!(await deps.getSession(req))) return plain(PROFILE_MESSAGES.unauthorized, 401);
-    const store = deps.getStore();
+    const store = await deps.getStore();
     if (!store) return plain(PROFILE_MESSAGES.notConfigured, 503);
     try {
       return await run(store);
@@ -389,7 +389,7 @@ function dbError(action: string, error: { message?: string; code?: string } | nu
 export function createSupabaseProfileDb(client: SupabaseClient): ProfileDb {
   return {
     async loadRow() {
-      // Jeden właściciel: pierwszy wiersz (najmniejsze id).
+      // Lekcja 7: klient zalogowanej osoby + RLS → widać tylko jej wiersz (jeden na użytkownika).
       const { data, error } = await client
         .from("user_profiles")
         .select("id, name, preferences")
@@ -410,7 +410,7 @@ export function createSupabaseProfileDb(client: SupabaseClient): ProfileDb {
       if (error) throw dbError("zapis profilu", error);
     },
     async deleteAll() {
-      // Supabase wymaga warunku przy delete – „id > 0” obejmuje wszystkie wiersze (jeden właściciel).
+      // Supabase wymaga warunku przy delete – „id > 0”; RLS ogranicza to do wiersza zalogowanej osoby.
       const { error } = await client.from("user_profiles").delete().gt("id", 0);
       if (error) throw dbError("wyczyszczenie profilu", error);
     },

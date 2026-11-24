@@ -262,7 +262,7 @@ type ConversationSession = { secret: string; token: string };
 
 type ConversationHandlerDeps = {
   getSession: (req: Request) => ConversationSession | null | Promise<ConversationSession | null>;
-  getStore: () => ConversationStore | null;
+  getStore: () => ConversationStore | null | Promise<ConversationStore | null>;
   sign: (session: { secret: string; token: string }, history: ChatTurn[]) => string;
 };
 const NO_STORE = { "Cache-Control": "no-store" };
@@ -278,7 +278,7 @@ async function respondWithConversation(
 ): Promise<Response> {
   const session = await deps.getSession(req);
   if (!session) return plain(CONVERSATION_MESSAGES.unauthorized, 401);
-  const store = deps.getStore();
+  const store = await deps.getStore();
   if (!store) return Response.json({ conversationId: null, messages: [] }, { headers: NO_STORE });
   try {
     const found = await read(store);
@@ -305,7 +305,7 @@ export function createDeleteConversationHandler(deps: Omit<ConversationHandlerDe
     if (!(await deps.getSession(req))) return plain(CONVERSATION_MESSAGES.unauthorized, 401);
     const id = parseConversationParam(rawId);
     if (id === null) return plain(CONVERSATION_MESSAGES.badId, 400);
-    const store = deps.getStore();
+    const store = await deps.getStore();
     if (!store) return plain(CONVERSATION_MESSAGES.deleteError, 503);
     try {
       const deleted = await store.remove(id);

@@ -9,7 +9,7 @@ import {
   formatMessageCount,
   type ConversationSummary,
 } from "../../lib/amber-conversations";
-import { getConversationStore } from "../../lib/supabase";
+import { getUserConversationStore } from "../../lib/supabase";
 import DeleteConversationButton from "./delete-button";
 
 // Lekcja 5, Warsztat 2 (Standard): lista zapisanych rozmów – jak pasek boczny w ChatGPT.
@@ -23,7 +23,7 @@ export default async function HistoryPage() {
 
   let conversations: ConversationSummary[] = [];
   let problem: string | null = null;
-  const store = getConversationStore();
+  const store = await getUserConversationStore();
   if (!store) {
     problem = "Baza rozmów nie jest skonfigurowana. Uzupełnij dane Supabase w .env.local i uruchom ponownie serwer.";
   } else {

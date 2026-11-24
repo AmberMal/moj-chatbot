@@ -105,5 +105,27 @@ check("Wyloguj: pełne przejście location.replace(\"/login\")", logout.includes
 check("Strażnik „Wstecz” w layout (pageshow + persisted → reload)", read("app/layout.tsx").includes("<BackForwardGuard />") &&
   read("app/back-forward-guard.tsx").includes("event.persisted") && read("app/back-forward-guard.tsx").includes("window.location.reload()"));
 
+console.log("\n=== 6. Warsztat 2: dane każdej osoby osobno (RLS) ===");
+const supa = read("lib/supabase.ts");
+const userPart = supa.slice(supa.indexOf("export function createUserStores"), supa.indexOf("export function getKnowledgeStore"));
+check("Rozmowy i profil: klient zalogowanej osoby (createSupabaseServerClient), nie klucz secret", userPart.includes("createSupabaseServerClient()") && !userPart.includes("getSupabase()"));
+check("Baza wiedzy dalej kluczem secret (getSupabase)", /getKnowledgeStore[\s\S]*?getSupabase\(\)/.test(supa) && /getSearchKnowledgeTool[\s\S]*?getSupabase\(\)/.test(supa));
+check("Stare magazyny na kluczu secret usunięte", !supa.includes("export function getConversationStore") && !supa.includes("export function getProfileStore"));
+const convFile = read("lib/amber-conversations.ts"), profFile = read("lib/amber-profile.ts");
+check("Aplikacja nie wysyła user_id (wpisuje go baza)", !/user_id/.test(convFile) && !/user_id/.test(profFile));
+const agentRouteFile = read("app/api/agent/route.ts");
+check("Agent: zapiszProfil, profil w instrukcjach i zapis rozmów – magazyny zalogowanej osoby",
+  agentRouteFile.includes("createUserStores(await createSupabaseServerClient())") && agentRouteFile.includes("createProfileTool(profileStore)") &&
+  agentRouteFile.includes("const store = userStores.profile") && agentRouteFile.includes("conversations: () => userStores.conversations"));
+check("Endpointy i strony: getUserConversationStore / getUserProfileStore", ["app/api/conversations/latest/route.ts", "app/api/conversations/[id]/route.ts", "app/history/page.tsx"].every((f) => read(f).includes("getUserConversationStore")) &&
+  ["app/api/profile/route.ts", "app/profile/page.tsx"].every((f) => read(f).includes("getUserProfileStore")));
+check("Nikt nie bierze user_id z zapytania ani od modelu", [...routes, "app/history/page.tsx", "app/profile/page.tsx", "lib/amber-profile.ts"].every((f) => !/body\.user_id|userId\s*[:=]\s*body|input\.user_id/.test(read(f))));
+{
+  const calls = [];
+  const order = createProfileApi({ getSession: async () => { calls.push("sesja"); return null; }, getStore: async () => { calls.push("baza"); return null; } });
+  await order.GET(req("/api/profile"));
+  check("Asynchroniczny magazyn: najpierw sesja, bez niej baza nie jest otwierana", calls.join(",") === "sesja");
+}
+
 console.log(`\nWynik: ${ok} zaliczonych, ${bad} niezaliczonych.`);
 process.exitCode = bad === 0 ? 0 : 1;
