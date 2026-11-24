@@ -259,7 +259,7 @@ export const PROFILE_MESSAGES = {
 } as const;
 
 export function createProfileApi(deps: {
-  getSession: (req: Request) => unknown | null;
+  getSession: (req: Request) => unknown | Promise<unknown>;
   getStore: () => ProfileStore | null;
 }) {
   const headers = { "Cache-Control": "no-store" };
@@ -269,7 +269,7 @@ export function createProfileApi(deps: {
   const withProfile = (profile: Profile) => json({ profile, greeting: greetingText(profile) });
 
   async function guarded(req: Request, label: string, run: (store: ProfileStore) => Promise<Response>): Promise<Response> {
-    if (!deps.getSession(req)) return plain(PROFILE_MESSAGES.unauthorized, 401);
+    if (!(await deps.getSession(req))) return plain(PROFILE_MESSAGES.unauthorized, 401);
     const store = deps.getStore();
     if (!store) return plain(PROFILE_MESSAGES.notConfigured, 503);
     try {

@@ -1,13 +1,14 @@
-import { cookies } from "next/headers";
-import { SESSION_COOKIE, getAuthConfig, isSessionValid } from "../lib/auth";
+import { redirect } from "next/navigation";
+import { getCurrentUser } from "../lib/auth";
 import Chat from "./chat";
-import LoginForm from "./login-form";
 
-// Komponent serwerowy: sesję sprawdzamy na serwerze, zanim pokażemy czat.
+// Komponent serwerowy: sesję sprawdzamy na serwerze, zanim pokażemy czat. Czyta ciasteczka – zawsze dynamiczny.
+export const dynamic = "force-dynamic";
+
 export default async function Home() {
-  const config = getAuthConfig();
-  const token = (await cookies()).get(SESSION_COOKIE)?.value;
-  const loggedIn = isSessionValid(token, config);
+  // Lekcja 7: zalogowana osoba (zweryfikowana sesja Supabase). Bez niej – strona logowania.
+  const user = await getCurrentUser();
+  if (!user) redirect("/login");
 
   return (
     <main className="chat">
@@ -15,7 +16,7 @@ export default async function Home() {
         <h1 className="brand-logo">Amber</h1>
         <p className="brand-tagline">Asystent Amber Security Systems Ltd – alarmy, CCTV i ochrona przeciwpożarowa</p>
       </header>
-      {loggedIn ? <Chat /> : <LoginForm configured={config !== null} />}
+      <Chat email={user.email} />
     </main>
   );
 }

@@ -1,5 +1,5 @@
-import { SESSION_COOKIE, getAuthConfig, isSessionValid, readCookie } from "../../../../lib/auth";
-import { deriveHistoryKey, sessionIdFromToken, signAgentChatTurn } from "../../../../lib/amber-history";
+import { getApiSession } from "../../../../lib/auth";
+import { deriveHistoryKey, historySessionId, signAgentChatTurn } from "../../../../lib/amber-history";
 import { createConversationByIdHandler, createDeleteConversationHandler } from "../../../../lib/amber-conversations";
 import { getConversationStore } from "../../../../lib/supabase";
 
@@ -9,19 +9,16 @@ import { getConversationStore } from "../../../../lib/supabase";
 // 2. Odpowiedzi Amber dostają podpis dla bieżącej sesji (ta sama funkcja co w /api/agent).
 export const dynamic = "force-dynamic";
 
-// Sesja z ciasteczka (wspólna dla GET i DELETE).
-function getSession(request: Request) {
-  const authConfig = getAuthConfig();
-  const token = readCookie(request, SESSION_COOKIE);
-  if (!authConfig || !token || !isSessionValid(token, authConfig)) return null;
-  return { secret: authConfig.secret, token };
+// Zalogowana osoba (zweryfikowana sesja Supabase) – wspólna dla GET i DELETE.
+function getSession() {
+  return getApiSession();
 }
 
 const handle = createConversationByIdHandler({
   getSession,
   getStore: getConversationStore,
   sign: (session, history) =>
-    signAgentChatTurn(deriveHistoryKey(session.secret), sessionIdFromToken(session.token), history, {}),
+    signAgentChatTurn(deriveHistoryKey(session.secret), historySessionId(session.token), history, {}),
 });
 
 export async function GET(req: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -29,7 +26,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
 }
 
 // Warsztat 2 (Dla szybkich): usunięcie rozmowy (z /history, po potwierdzeniu). Sesja → numer → baza.
-// Wiadomości usuwa baza (ON DELETE CASCADE). Ciasteczko sesji ma SameSite=Strict – inna strona nie wyśle tego zapytania z sesją.
+// Wiadomości usuwa baza (ON DELETE CASCADE). Ciasteczka sesji Supabase mają SameSite=Lax – inna strona nie wyśle zapytania DELETE z sesją.
 const handleDelete = createDeleteConversationHandler({ getSession, getStore: getConversationStore });
 
 export async function DELETE(req: Request, { params }: { params: Promise<{ id: string }> }) {

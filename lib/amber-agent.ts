@@ -258,9 +258,11 @@ export const AGENT_MESSAGES = {
   providerError: "Wystąpił błąd dostawcy AI (OpenRouter). Spróbuj ponownie za chwilę.",
 } as const;
 
+type AgentSession = { secret: string; token: string };
+
 export type AgentDeps = {
   // 1. Sesja (wywoływana jako pierwsza). null = brak ważnej sesji → 401.
-  getSession: (req: Request) => { secret: string; token: string } | null;
+  getSession: (req: Request) => AgentSession | null | Promise<AgentSession | null>;
   // 2. Modele i narzędzia – tworzone dopiero po sprawdzeniu sesji. null = brak konfiguracji → 500.
   //    sessionId – identyfikator sesji (np. dla notatek oddzielnych w każdej sesji).
   createModels: (ctx: { sessionId: string }) => { model: LanguageModel; tools: ToolSet } | null;
@@ -507,7 +509,7 @@ export function createAgentHandler(deps: AgentDeps) {
     // Warsztat 2 (Standard): czas zadania liczony od przyjęcia zapytania.
     const startedAt = Date.now();
     // 1. Najpierw sesja. Bez ważnej sesji: 401 – przed odczytem treści i przed wywołaniem modelu.
-    const session = deps.getSession(req);
+    const session = await deps.getSession(req);
     if (!session) return text(AGENT_MESSAGES.unauthorized, 401);
 
     // 2. Treść zapytania i tryb.

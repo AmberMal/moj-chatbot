@@ -72,7 +72,7 @@ export type DashboardSources = {
 
 export type DashboardDeps = {
   // 1. Sesja (wywoływana jako pierwsza). false = brak ważnej sesji → 401.
-  hasSession: (req: Request) => boolean;
+  hasSession: (req: Request) => boolean | Promise<boolean>;
   sources: DashboardSources;
   // Podsumowanie agenta: dane kart → 2–3 zdania. null = brak konfiguracji modelu.
   summarize:
@@ -441,7 +441,7 @@ export function createDashboardHandler(deps: DashboardDeps) {
 
   return async function handleDashboardRequest(req: Request): Promise<Response> {
     // 1. Najpierw sesja – bez niej 401, zanim cokolwiek zostanie pobrane.
-    if (!deps.hasSession(req)) return json({ error: DASHBOARD_MESSAGES.unauthorized }, 401);
+    if (!(await deps.hasSession(req))) return json({ error: DASHBOARD_MESSAGES.unauthorized }, 401);
 
     // 2. Dane wejściowe.
     let body: unknown;

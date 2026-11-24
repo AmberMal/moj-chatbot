@@ -6,8 +6,8 @@
 //    identyfikator sesji, całą rozmowę do tej odpowiedzi włącznie (role, treść, kolejność)
 //    oraz metadane odpowiedzi. Zmieniona lub dopisana historia jest odrzucana
 //    ZANIM cokolwiek trafi do modelu.
-// 3. Klucz do podpisów jest osobny – wyprowadzony z SESSION_SECRET metodą HKDF
-//    z etykietą "amber-history-v1" (inny niż klucz ciasteczka sesji).
+// 3. Klucz do podpisów jest osobny – wyprowadzony metodą HKDF z etykietą "amber-history-v1".
+//    Od lekcji 7 z SUPABASE_SECRET_KEY (tylko serwer; wcześniej SESSION_SECRET).
 // 4. Warsztat 3: dwa rodzaje podpisanych odpowiedzi Amber:
 //    – odpowiedź JSON z wcześniejszej wersji czatu (przed Warsztatem 3): metadane category/priority/needs_review,
 //      podpis v4 – nadal sprawdzany, żeby wcześniej zaczęte rozmowy działały dalej;
@@ -119,16 +119,15 @@ export const HISTORY_MESSAGES = {
 // Klucz i podpis
 // ---------------------------------------------------------------------------
 
-// Osobny klucz do podpisywania historii, wyprowadzony z SESSION_SECRET (HKDF-SHA256).
+// Osobny klucz do podpisywania historii, wyprowadzony z sekretu serwera (HKDF-SHA256).
 export function deriveHistoryKey(sessionSecret: string): Buffer {
   return Buffer.from(hkdfSync("sha256", sessionSecret, "amber-chatbot", KEY_LABEL, 32));
 }
 
-// Identyfikator sesji = podpisana część ciasteczka (data wygaśnięcia + losowy identyfikator).
-// Wywoływać tylko dla ciasteczka już sprawdzonego przez isSessionValid.
-export function sessionIdFromToken(token: string): string {
-  const lastDot = token.lastIndexOf(".");
-  return lastDot > 0 ? token.slice(0, lastDot) : "";
+// Lekcja 7: identyfikator w podpisie historii (i w notatkach agenta) = identyfikator zalogowanej osoby
+// z zweryfikowanej sesji Supabase. Pusty identyfikator = brak podpisu (historia odrzucana).
+export function historySessionId(userId: string): string {
+  return userId ? `user:${userId}` : "";
 }
 
 // Jednoznaczne kodowanie: JSON z tablic [rola, tekst] w kolejności rozmowy,

@@ -1,7 +1,7 @@
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import { after } from "next/server";
 import type { ToolSet } from "ai";
-import { SESSION_COOKIE, getAuthConfig, isSessionValid, readCookie } from "../../../lib/auth";
+import { getApiSession } from "../../../lib/auth";
 import {
   AMBER_ANALYZE_INSTRUCTIONS,
   AMBER_CHAT_INSTRUCTIONS,
@@ -22,7 +22,7 @@ import {
   MAX_USER_MESSAGE_CHARS,
   checkChatHistory,
   deriveHistoryKey,
-  sessionIdFromToken,
+  historySessionId,
   signAgentChatTurn,
 } from "../../../lib/amber-history";
 import { createAgentHandler } from "../../../lib/amber-agent";
@@ -36,13 +36,8 @@ const DEV_DIAGNOSTICS = process.env.NODE_ENV === "development";
 
 export async function POST(req: Request) {
   const handle = createAgentHandler({
-    // 1. Sesja – sprawdzana jako pierwsza (bez niej 401).
-    getSession: (request) => {
-      const authConfig = getAuthConfig();
-      const token = readCookie(request, SESSION_COOKIE);
-      if (!authConfig || !token || !isSessionValid(token, authConfig)) return null;
-      return { secret: authConfig.secret, token };
-    },
+    // 1. Zalogowana osoba – sprawdzana jako pierwsza (zweryfikowana sesja Supabase; bez niej 401).
+    getSession: () => getApiSession(),
     // 2. Model i narzędzia – dopiero po sprawdzeniu sesji.
     createModels: ({ sessionId }) => {
       const apiKey = process.env.OPENROUTER_API_KEY;
@@ -99,7 +94,8 @@ export async function POST(req: Request) {
       return { model: openrouter(modelId), tools };
     },
     instructions: { chat: DEV_DIAGNOSTICS ? AMBER_CHAT_INSTRUCTIONS_DEV : AMBER_CHAT_INSTRUCTIONS, analyze: AMBER_ANALYZE_INSTRUCTIONS },
-    history: { deriveHistoryKey, sessionIdFromToken, checkChatHistory, signAgentChatTurn },
+    // Identyfikator w podpisach historii i w notatkach = identyfikator zalogowanej osoby.
+    history: { deriveHistoryKey, sessionIdFromToken: historySessionId, checkChatHistory, signAgentChatTurn },
     generateAmberOutput,
     maxTextChars: MAX_USER_MESSAGE_CHARS,
     // Lekcja 5, Warsztat 2: zapis rozmów w Supabase (po sprawdzeniu sesji i po zakończeniu odpowiedzi).

@@ -25,7 +25,7 @@ import {
 import { MockImageModelV4 } from "ai/test";
 import { IMAGE_MODEL_ID, createImageTool } from "../lib/amber-image.ts";
 import { buildStepList, formatAgentStats, formatStepList, markStoppedQuestion, prepareAgentMessages, STEP_LIMIT_MESSAGE, STOPPED_TASK_NOTE } from "../lib/amber-chat-client.ts";
-import { SESSION_COOKIE, createSessionToken, isSessionValid, readCookie } from "../lib/auth.ts";
+import { SESSION_COOKIE, createSessionToken, isSessionValid, readCookie, sessionIdFromToken } from "./fake-auth-for-tests.mjs";
 import { AMBER_ANALYZE_INSTRUCTIONS, AMBER_CHAT_INSTRUCTIONS, AMBER_CHAT_INSTRUCTIONS_DEV } from "../lib/amber-instructions.ts";
 import { generateAmberOutput } from "../lib/amber-output.ts";
 import { checkArea, informacjeOUrzadzeniu, sprawdzObszar } from "../lib/amber-tools.ts";
@@ -70,7 +70,6 @@ import {
   MAX_USER_MESSAGE_CHARS,
   checkChatHistory,
   deriveHistoryKey,
-  sessionIdFromToken,
   signAgentChatTurn,
 } from "../lib/amber-history.ts";
 
@@ -335,16 +334,16 @@ console.log("\n=== 7. notatki (pamięć serwera, osobno dla sesji) ===");
 
 // ---------------------------------------------------------------------------
 console.log("\n=== 8. diagnostyka (tylko „konfiguracja kompletna: tak/nie”) ===");
-const FAKE_ENV = { OPENROUTER_API_KEY: "sk-or-TEST-SEKRET-123", OPENROUTER_MODEL: "google/gemini-test", CHAT_PASSWORD: "", SESSION_SECRET: "tajne-xyz" };
+const FAKE_ENV = { OPENROUTER_API_KEY: "sk-or-TEST-SEKRET-123", OPENROUTER_MODEL: "google/gemini-test", NEXT_PUBLIC_SUPABASE_URL: "", NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: "sb_publishable_test", SUPABASE_SECRET_KEY: "tajne-xyz" };
 {
   const d = diagnostics({ env: FAKE_ENV }, NOW);
   check("Pusta zmienna → konfiguracja kompletna: nie", d.konfiguracjaKompletna === "nie");
-  const full = diagnostics({ env: { ...FAKE_ENV, CHAT_PASSWORD: "x" } }, NOW);
+  const full = diagnostics({ env: { ...FAKE_ENV, NEXT_PUBLIC_SUPABASE_URL: "https://x.supabase.co" } }, NOW);
   check("Wszystkie ustawione → konfiguracja kompletna: tak", full.konfiguracjaKompletna === "tak");
   check("Brak zmiennych → konfiguracja kompletna: nie", diagnostics({ env: {} }, NOW).konfiguracjaKompletna === "nie");
   const json = JSON.stringify(d) + JSON.stringify(full);
   check("Wynik NIE zawiera wartości sekretów", !json.includes("sk-or-TEST") && !json.includes("tajne-xyz"), json);
-  check("Wynik NIE zawiera nazw zmiennych środowiskowych", !/OPENROUTER|CHAT_PASSWORD|SESSION_SECRET|API_KEY/.test(json));
+  check("Wynik NIE zawiera nazw zmiennych środowiskowych", !/OPENROUTER|SUPABASE|PUBLISHABLE|API_KEY/.test(json));
   check("Wynik NIE zawiera modelu, listy narzędzi ani limitu kroków", !/gemini|model|narzedzia|limitKrokow/.test(json), json);
   check("Tylko pola: konfiguracjaKompletna + pobrano (godzina sprawdzenia)", Object.keys(d).sort().join() === "konfiguracjaKompletna,pobrano" && d.pobrano === "12.11.2026, 18:30:05");
 }
@@ -454,7 +453,7 @@ const output = (message, name) => message.parts.find((p) => p.type === `tool-${n
   check("Wyniki narzędzi dotarły do przeglądarki", output(message, "czas")?.strefa === "Europe/Warsaw" && output(message, "pogoda")?.opis === "deszcz" && output(message, "waluty")?.kwotaPLN === 425.12 && output(message, "swieta")?.kraj === "GB" && output(message, "wikipedia")?.tytul === "Alarm" && output(message, "kalkulator")?.wynik === 133.2, JSON.stringify(["czas","pogoda","waluty","swieta","wikipedia","kalkulator"].map((n) => output(message, n))));
   check("Notatka zapisana w sesji użytkownika", NOTES.get(lastSessionId)?.[0]?.tresc === "Oddzwonić w piątek" && lastSessionId === sessionIdFromToken(TOKEN));
   check("Diagnostyka w czacie: tylko konfiguracja kompletna (tak/nie) + godzina", JSON.stringify(Object.keys(output(message, "diagnostyka") ?? {}).sort()) === '["konfiguracjaKompletna","pobrano"]' && output(message, "diagnostyka")?.konfiguracjaKompletna === "nie");
-  check("Strumień do przeglądarki NIE zawiera wartości ani nazw zmiennych", !raw.includes("sk-or-TEST") && !raw.includes("tajne-xyz") && !/OPENROUTER_API_KEY|SESSION_SECRET|CHAT_PASSWORD/.test(raw));
+  check("Strumień do przeglądarki NIE zawiera wartości ani nazw zmiennych", !raw.includes("sk-or-TEST") && !raw.includes("tajne-xyz") && !/OPENROUTER_API_KEY|SUPABASE_SECRET_KEY|NEXT_PUBLIC_SUPABASE/.test(raw));
   const sentTools = model.doStreamCalls[0].tools.map((t) => t.name).sort();
   check("Model dostał narzędzia z opisami (bez aktualnyCzas)", sentTools.includes("czas") && !sentTools.includes("aktualnyCzas") && model.doStreamCalls[0].tools.every((t) => t.description && t.description.length > 40), sentTools.join());
   check("Odpowiedź podpisana", typeof message.metadata?.sig === "string");

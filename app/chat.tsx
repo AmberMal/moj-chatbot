@@ -4,6 +4,7 @@ import { useChat } from "@ai-sdk/react";
 import Link from "next/link";
 import { DefaultChatTransport, type UIMessage } from "ai";
 import { useRouter } from "next/navigation";
+import { createSupabaseBrowserClient } from "../lib/supabase-auth/client";
 import { Fragment, useEffect, useRef, useState, type ChangeEvent, type FormEvent } from "react";
 import {
   AGENT_API,
@@ -126,7 +127,7 @@ const transport = new DefaultChatTransport<UIMessage>({
   }),
 });
 
-export default function Chat() {
+export default function Chat({ email }: { email: string }) {
   const router = useRouter();
   const [input, setInput] = useState("");
   const [pendingImage, setPendingImage] = useState<PendingImage | null>(null);
@@ -391,16 +392,22 @@ export default function Chat() {
     void loadGreeting();
   }
 
-  // Wyjście: serwer usuwa cookie z sesją, a strona wraca do ekranu hasła.
+  // Lekcja 7: wylogowanie z Supabase (usuwa ciasteczka sesji), potem strona logowania.
   async function handleLogout() {
     stop();
-    await fetch("/api/logout", { method: "POST" });
-    router.refresh();
+    try {
+      await createSupabaseBrowserClient()?.auth.signOut();
+    } finally {
+      router.replace("/login");
+      router.refresh();
+    }
   }
 
   return (
     <>
       <div className="toolbar">
+        {/* Lekcja 7: e-mail zalogowanej osoby */}
+        {email && <span className="user-email">{email}</span>}
         {/* Lekcja 5, Warsztat 2: nowa rozmowa (stara zostaje w bazie) */}
         <button type="button" className="logout" disabled={isLocked} onClick={handleNewConversation}>
           Nowa rozmowa
@@ -422,7 +429,7 @@ export default function Chat() {
           Dashboard podróży
         </Link>
         <button type="button" className="logout" onClick={handleLogout}>
-          Wyjdź
+          Wyloguj
         </button>
       </div>
 

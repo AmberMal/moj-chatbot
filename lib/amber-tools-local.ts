@@ -236,7 +236,14 @@ export function createNotesTool(sessionKey: string, store: NotesStore = globalSt
 // Zwraca wyłącznie „konfiguracja kompletna: tak/nie” (oraz godzinę sprawdzenia) –
 // bez modelu, listy narzędzi, limitu kroków, nazw zmiennych środowiskowych, kluczy, haseł i wartości.
 // ---------------------------------------------------------------------------
-const REQUIRED_ENV_VARS = ["OPENROUTER_API_KEY", "OPENROUTER_MODEL", "CHAT_PASSWORD", "SESSION_SECRET"] as const;
+// Lekcja 7: logowanie przez Supabase Auth (zamiast CHAT_PASSWORD i SESSION_SECRET).
+const REQUIRED_ENV_VARS = [
+  "OPENROUTER_API_KEY",
+  "OPENROUTER_MODEL",
+  "NEXT_PUBLIC_SUPABASE_URL",
+  "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY",
+  "SUPABASE_SECRET_KEY",
+] as const;
 export type DiagnosticsResult = { konfiguracjaKompletna: "tak" | "nie"; pobrano: string };
 
 export function diagnostics({ env }: { env: Record<string, string | undefined> }, now = new Date()): DiagnosticsResult {

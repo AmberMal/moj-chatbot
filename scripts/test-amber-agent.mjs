@@ -14,7 +14,7 @@ import {
   createAgentHandler,
   describeToolResult,
 } from "../lib/amber-agent.ts";
-import { SESSION_COOKIE, createSessionToken, isSessionValid, readCookie } from "../lib/auth.ts";
+import { SESSION_COOKIE, createSessionToken, isSessionValid, readCookie, sessionIdFromToken } from "./fake-auth-for-tests.mjs";
 import { AMBER_ANALYZE_INSTRUCTIONS, AMBER_CHAT_INSTRUCTIONS } from "../lib/amber-instructions.ts";
 import { AMBER_FAILURE_MESSAGES, generateAmberOutput } from "../lib/amber-output.ts";
 import { aktualnyCzas, informacjeOUrzadzeniu, sprawdzObszar } from "../lib/amber-tools.ts";
@@ -27,7 +27,6 @@ import {
   MAX_USER_MESSAGE_CHARS,
   checkChatHistory,
   deriveHistoryKey,
-  sessionIdFromToken,
   signAgentChatTurn,
   signAssistantTurn,
 } from "../lib/amber-history.ts";

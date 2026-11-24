@@ -258,8 +258,10 @@ export function toSignedUIMessages(
   });
 }
 
+type ConversationSession = { secret: string; token: string };
+
 type ConversationHandlerDeps = {
-  getSession: (req: Request) => { secret: string; token: string } | null;
+  getSession: (req: Request) => ConversationSession | null | Promise<ConversationSession | null>;
   getStore: () => ConversationStore | null;
   sign: (session: { secret: string; token: string }, history: ChatTurn[]) => string;
 };
@@ -274,7 +276,7 @@ async function respondWithConversation(
   label: string,
   read: (store: ConversationStore) => Promise<{ conversationId: number; messages: StoredMessage[] } | null | "not-found">,
 ): Promise<Response> {
-  const session = deps.getSession(req);
+  const session = await deps.getSession(req);
   if (!session) return plain(CONVERSATION_MESSAGES.unauthorized, 401);
   const store = deps.getStore();
   if (!store) return Response.json({ conversationId: null, messages: [] }, { headers: NO_STORE });
@@ -300,7 +302,7 @@ export function createLatestConversationHandler(deps: ConversationHandlerDeps) {
 // Warsztat 2 (Dla szybkich): DELETE /api/conversations/[id] – kolejność: sesja → numer rozmowy → baza.
 export function createDeleteConversationHandler(deps: Omit<ConversationHandlerDeps, "sign">) {
   return async (req: Request, rawId: string) => {
-    if (!deps.getSession(req)) return plain(CONVERSATION_MESSAGES.unauthorized, 401);
+    if (!(await deps.getSession(req))) return plain(CONVERSATION_MESSAGES.unauthorized, 401);
     const id = parseConversationParam(rawId);
     if (id === null) return plain(CONVERSATION_MESSAGES.badId, 400);
     const store = deps.getStore();
@@ -322,7 +324,7 @@ export function createDeleteConversationHandler(deps: Omit<ConversationHandlerDe
 // Kolejność: sesja → numer rozmowy → baza.
 export function createConversationByIdHandler(deps: ConversationHandlerDeps) {
   return async (req: Request, rawId: string) => {
-    if (!deps.getSession(req)) return plain(CONVERSATION_MESSAGES.unauthorized, 401);
+    if (!(await deps.getSession(req))) return plain(CONVERSATION_MESSAGES.unauthorized, 401);
     const id = parseConversationParam(rawId);
     if (id === null) return plain(CONVERSATION_MESSAGES.badId, 400);
     return respondWithConversation(deps, req, "/api/conversations/[id]", async (store) =>

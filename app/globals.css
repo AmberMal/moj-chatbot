@@ -564,3 +564,13 @@ h1 { margin: 0; font-size: 26px; }
   font-size: 14px;
   line-height: 1.45;
 }
+
+/* Lekcja 7: logowanie i konta (Supabase Auth) */
+.user-email { align-self: center; margin-right: auto; font-size: 0.9rem; color: var(--muted, #555); overflow-wrap: anywhere; }
+.auth-tabs { display: flex; gap: 8px; margin-bottom: 4px; }
+.auth-tab { flex: 1; padding: 8px 12px; border: 1px solid #d9d4c7; border-radius: 10px; background: transparent; font: inherit; cursor: pointer; }
+.auth-tab.active { background: #F0C143; border-color: #F0C143; font-weight: 600; color: #111; }
+.login input[type="email"], .login input[type="password"] { width: 100%; padding: 10px 12px; border: 1px solid #d9d4c7; border-radius: 10px; font: inherit; box-sizing: border-box; }
+.auth-submit { padding: 10px 16px; border: 0; border-radius: 10px; background: #F0C143; color: #111; font: inherit; font-weight: 600; cursor: pointer; }
+.auth-submit:disabled { opacity: 0.6; cursor: not-allowed; }
+.auth-info { margin: 0; color: #2f6b2f; }

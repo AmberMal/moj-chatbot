@@ -1,6 +1,6 @@
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import { generateText } from "ai";
-import { SESSION_COOKIE, getAuthConfig, isSessionValid, readCookie } from "../../../lib/auth";
+import { getCurrentUser } from "../../../lib/auth";
 import { AMBER_COMPARE_INSTRUCTIONS, AMBER_DASHBOARD_INSTRUCTIONS } from "../../../lib/amber-instructions";
 import { geocodeCity, getCurrency, getHolidays, getWeather, getWikipedia } from "../../../lib/amber-tools-api";
 import { timeIn } from "../../../lib/amber-tools-local";
@@ -27,12 +27,8 @@ export async function POST(req: Request) {
       : null;
 
   const handle = createDashboardHandler({
-    // 1. Sesja – sprawdzana jako pierwsza (bez niej 401).
-    hasSession: (request) => {
-      const authConfig = getAuthConfig();
-      const token = readCookie(request, SESSION_COOKIE);
-      return Boolean(authConfig && token && isSessionValid(token, authConfig));
-    },
+    // 1. Zalogowana osoba – sprawdzana jako pierwsza (zweryfikowana sesja Supabase; bez niej 401).
+    hasSession: async () => (await getCurrentUser()) !== null,
     // Te same funkcje, z których korzystają narzędzia agenta.
     sources: {
       geocodeCity: (miasto) => geocodeCity(miasto),

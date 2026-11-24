@@ -6,7 +6,7 @@ import { readFileSync } from "node:fs";
 import { readUIMessageStream } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 import { AGENT_TOOL_NAMES, createAgentHandler } from "../lib/amber-agent.ts";
-import { SESSION_COOKIE, createSessionToken, isSessionValid, readCookie } from "../lib/auth.ts";
+import { SESSION_COOKIE, createSessionToken, isSessionValid, readCookie, sessionIdFromToken } from "./fake-auth-for-tests.mjs";
 import { AMBER_ANALYZE_INSTRUCTIONS, AMBER_CHAT_INSTRUCTIONS } from "../lib/amber-instructions.ts";
 import { generateAmberOutput } from "../lib/amber-output.ts";
 import {
@@ -35,7 +35,6 @@ import {
   MAX_USER_MESSAGE_CHARS,
   checkChatHistory,
   deriveHistoryKey,
-  sessionIdFromToken,
   signAgentChatTurn,
 } from "../lib/amber-history.ts";
 
@@ -399,13 +398,13 @@ console.log("\n=== 10. Standard: czat i strona /profile (kod źródłowy) ===");
   check("Czat: powitanie w pustej rozmowie (tylko na ekranie)", ui.includes('className="message assistant greeting"') && ui.includes("fetch(PROFILE_API"));
   check("Czat: po „Nowa rozmowa” powitanie wczytywane od nowa (nowe imię)", /handleNewConversation\(\)[\s\S]*?void loadGreeting\(\);\s*\}/.test(ui));
   check("Powitanie nie trafia do historii (nie przez setMessages/sendChat)", !ui.includes("setMessages([{") && !/sendChat\(\{ text: greeting/.test(ui));
-  check("/profile: sesja przed odczytem bazy, bez sesji formularz hasła", page.includes("isSessionValid(") && page.indexOf("isSessionValid(") < page.indexOf("getProfileStore()") && page.includes("<LoginForm"));
+  check("/profile: zalogowana osoba przed odczytem bazy, bez logowania /login", page.includes("await getCurrentUser()") && page.indexOf("getCurrentUser()") < page.indexOf("getProfileStore()") && page.includes('if (!user) redirect("/login")'));
   check("/profile: komponent serwerowy bez klucza", !page.includes('"use client"') && !page.includes("SUPABASE_"));
   check("Edytor: poprawianie, usuwanie, dodawanie i czyszczenie przez /api/profile", editor.includes("PROFILE_API") && editor.includes('"PATCH"') &&
     editor.includes('{ pozycja: key }') && editor.includes('{ imie: true }') && editor.includes("{ wszystko: true }"));
   check("Edytor: „Wyczyść profil” z potwierdzeniem", editor.includes("window.confirm(") && editor.indexOf("window.confirm(") < editor.indexOf("{ wszystko: true }"));
   check("Endpoint /api/profile: GET, PATCH, DELETE i sesja", route.includes("export async function GET") && route.includes("export async function PATCH") &&
-    route.includes("export async function DELETE") && route.includes("isSessionValid"));
+    route.includes("export async function DELETE") && route.includes("getSession: () => getApiSession()"));
   check("Przeglądarka nie importuje Supabase", !editor.includes("@supabase") && !editor.includes("amber-profile") && !ui.includes("amber-profile"));
 }
 

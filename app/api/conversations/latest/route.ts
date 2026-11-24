@@ -1,5 +1,5 @@
-import { SESSION_COOKIE, getAuthConfig, isSessionValid, readCookie } from "../../../../lib/auth";
-import { deriveHistoryKey, sessionIdFromToken, signAgentChatTurn } from "../../../../lib/amber-history";
+import { getApiSession } from "../../../../lib/auth";
+import { deriveHistoryKey, historySessionId, signAgentChatTurn } from "../../../../lib/amber-history";
 import { createLatestConversationHandler } from "../../../../lib/amber-conversations";
 import { getConversationStore } from "../../../../lib/supabase";
 
@@ -10,15 +10,11 @@ import { getConversationStore } from "../../../../lib/supabase";
 export const dynamic = "force-dynamic";
 
 const handle = createLatestConversationHandler({
-  getSession: (request) => {
-    const authConfig = getAuthConfig();
-    const token = readCookie(request, SESSION_COOKIE);
-    if (!authConfig || !token || !isSessionValid(token, authConfig)) return null;
-    return { secret: authConfig.secret, token };
-  },
+  // Zalogowana osoba (zweryfikowana sesja Supabase) – bez niej 401.
+  getSession: () => getApiSession(),
   getStore: getConversationStore,
   sign: (session, history) =>
-    signAgentChatTurn(deriveHistoryKey(session.secret), sessionIdFromToken(session.token), history, {}),
+    signAgentChatTurn(deriveHistoryKey(session.secret), historySessionId(session.token), history, {}),
 });
 
 export async function GET(req: Request) {

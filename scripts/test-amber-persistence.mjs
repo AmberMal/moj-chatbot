@@ -7,7 +7,7 @@ import { readFileSync } from "node:fs";
 import { readUIMessageStream } from "ai";
 import { MockImageModelV4, MockLanguageModelV4 } from "ai/test";
 import { createAgentHandler, parseConversationId } from "../lib/amber-agent.ts";
-import { SESSION_COOKIE, createSessionToken, isSessionValid, readCookie } from "../lib/auth.ts";
+import { SESSION_COOKIE, createSessionToken, isSessionValid, readCookie, sessionIdFromToken } from "./fake-auth-for-tests.mjs";
 import { AMBER_ANALYZE_INSTRUCTIONS, AMBER_CHAT_INSTRUCTIONS } from "../lib/amber-instructions.ts";
 import { generateAmberOutput } from "../lib/amber-output.ts";
 import { IMAGE_MODEL_ID, createImageTool } from "../lib/amber-image.ts";
@@ -51,7 +51,6 @@ import {
   MAX_USER_MESSAGE_CHARS,
   checkChatHistory,
   deriveHistoryKey,
-  sessionIdFromToken,
   signAgentChatTurn,
 } from "../lib/amber-history.ts";
 
@@ -431,11 +430,11 @@ console.log("\n=== 7. Bezpieczeństwo i interfejs (kod źródłowy) ===");
   const supabase = read("lib/supabase.ts");
   const latest = read("app/api/conversations/latest/route.ts");
   const agentRoute = read("app/api/agent/route.ts");
-  check("Przeglądarka nie importuje Supabase ani klucza", !/supabase/i.test(ui.replace(/Supabase/g, "")) && !ui.includes("SUPABASE_") && !client.includes("SUPABASE_") && !client.includes("@supabase"));
+  check("Przeglądarka nie importuje bazy Supabase ani klucza (tylko klient logowania)", !/supabase/i.test(ui.replace(/Supabase/g, "").replace(/supabase-auth\/client/g, "")) && !ui.includes("SUPABASE_") && !client.includes("SUPABASE_") && !client.includes("@supabase"));
   check("Klucz tylko w zmiennych serwera (bez NEXT_PUBLIC_)", supabase.includes("process.env.SUPABASE_SECRET_KEY") && supabase.includes("process.env.SUPABASE_URL") &&
     ![ui, client, supabase, latest, agentRoute].some((f) => f.includes("NEXT_PUBLIC_SUPABASE")));
   check("lib/supabase.ts odmawia działania w przeglądarce", supabase.includes('typeof window !== "undefined"'));
-  check("Endpoint latest sprawdza sesję (isSessionValid) przed bazą", latest.includes("isSessionValid") && latest.includes("createLatestConversationHandler"));
+  check("Endpoint latest sprawdza zalogowaną osobę (getApiSession) przed bazą", latest.includes("getSession: () => getApiSession()") && latest.includes("createLatestConversationHandler"));
   check("Agent dostaje zapis rozmów (conversations: getConversationStore)", agentRoute.includes("conversations: getConversationStore"));
   check("Przycisk „Nowa rozmowa” w czacie", ui.includes("Nowa rozmowa") && ui.includes("onClick={handleNewConversation}"));
   check("„Nowa rozmowa” nie kasuje niczego w bazie (bez fetch/DELETE)", !/handleNewConversation\(\)\s*\{[^}]*fetch/.test(ui) && !ui.includes('"DELETE"'));
@@ -563,14 +562,14 @@ console.log("\n=== 12. Standard: strona /history i czat (kod źródłowy) ===");
   const page = read("app/history/page.tsx");
   const ui = read("app/chat.tsx");
   const byId = read("app/api/conversations/[id]/route.ts");
-  check("/history: sesja sprawdzana przed odczytem bazy", page.includes("isSessionValid") &&
-    page.indexOf("isSessionValid(") < page.indexOf("getConversationStore()") && page.includes("if (loggedIn)"));
-  check("/history: bez sesji formularz hasła", page.includes("<LoginForm"));
+  check("/history: zalogowana osoba sprawdzana przed odczytem bazy", page.includes("await getCurrentUser()") &&
+    page.indexOf("getCurrentUser()") < page.indexOf("getConversationStore()"));
+  check("/history: bez logowania przekierowanie na /login", page.includes('if (!user) redirect("/login")'));
   check("/history: kliknięcie otwiera rozmowę w czacie (/?c=numer)", page.includes("href={`/?c=${conversation.id}`}"));
   check("/history: tytuł, data i liczba wiadomości", page.includes("conversation.title") && page.includes("formatConversationDate") && page.includes("formatMessageCount"));
   check("/history: przycisk „Nowa rozmowa”", page.includes('href="/?new=1"') && page.includes("Nowa rozmowa"));
   check("/history: przeglądarka nie dostaje klucza (komponent serwerowy, bez \"use client\")", !page.includes('"use client"') && !page.includes("SUPABASE_"));
-  check("Endpoint [id] sprawdza sesję", byId.includes("isSessionValid") && byId.includes("createConversationByIdHandler"));
+  check("Endpoint [id] sprawdza zalogowaną osobę", byId.includes("getApiSession()") && byId.includes("createConversationByIdHandler"));
   check("Czat: link „Historia”", ui.includes("href={HISTORY_PAGE}") && ui.includes("Historia"));
   check("Czat: wczytanie wybranej rozmowy z adresu (/?c=…)", ui.includes("conversationFromSearch(window.location.search)") && ui.includes("conversationApiUrl(target.id)"));
   check("Czat: adres pokazuje bieżącą rozmowę (replaceState)", (ui.match(/window\.history\.replaceState/g) ?? []).length >= 3);

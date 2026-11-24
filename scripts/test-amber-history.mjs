@@ -12,7 +12,7 @@ import {
   MAX_USER_MESSAGE_CHARS,
   checkChatHistory,
   deriveHistoryKey,
-  sessionIdFromToken,
+  historySessionId,
   signAgentChatTurn,
   signAssistantTurn,
 } from "../lib/amber-history.ts";
@@ -146,7 +146,7 @@ console.log("\n=== CZĘŚĆ 2: sfałszowana historia ===");
   reject("Podpis innym kluczem", wrongKey);
 }
 {
-  // Podpis zrobiony bezpośrednio SESSION_SECRET (jak ciasteczko) – nie może pasować do klucza historii.
+  // Podpis zrobiony bezpośrednio sekretem serwera – nie może pasować do klucza historii (HKDF).
   const turns = [{ role: "user", text: "A" }, { role: "assistant", text: "B" }];
   const payload = JSON.stringify({ v: 1, sid: SESSION_A, history: turns.map((t) => [t.role, t.text]),
     meta: [META.category, META.priority, META.needs_review] });
@@ -188,9 +188,9 @@ check("Dozwolone kategorie zgodne z walidatorem W2",
   JSON.stringify(HISTORY_CATEGORIES) === JSON.stringify(AMBER_CATEGORIES));
 check("Dozwolone priorytety zgodne z walidatorem W2",
   JSON.stringify(HISTORY_PRIORITIES) === JSON.stringify(AMBER_PRIORITIES));
-check("Klucz historii różni się od SESSION_SECRET", !KEY.equals(Buffer.from(SECRET).subarray(0, 32)));
-check("Identyfikator sesji z ciasteczka (bez podpisu)",
-  sessionIdFromToken("1999999999.losowe.PODPIS") === "1999999999.losowe");
+check("Klucz historii różni się od samego sekretu serwera", !KEY.equals(Buffer.from(SECRET).subarray(0, 32)));
+check("Identyfikator w podpisie = identyfikator użytkownika (lekcja 7)",
+  historySessionId("abc-123") === "user:abc-123" && historySessionId("") === "");
 
 // Symulacja 3 kroków dokładnie tak jak w aplikacji: serwer podpisuje i wysyła strumień,
 // przeglądarka (readUIMessageStream = to samo przetwarzanie co useChat) zapisuje wiadomość,

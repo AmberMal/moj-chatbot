@@ -1,4 +1,4 @@
-import { SESSION_COOKIE, getAuthConfig, isSessionValid, readCookie } from "../../../lib/auth";
+import { getApiSession } from "../../../lib/auth";
 import { createUploadApi } from "../../../lib/amber-knowledge";
 import { getKnowledgeStore } from "../../../lib/supabase";
 
@@ -8,12 +8,8 @@ import { getKnowledgeStore } from "../../../lib/supabase";
 export const dynamic = "force-dynamic";
 
 const api = createUploadApi({
-  getSession: (request) => {
-    const authConfig = getAuthConfig();
-    const token = readCookie(request, SESSION_COOKIE);
-    if (!authConfig || !token || !isSessionValid(token, authConfig)) return null;
-    return { token };
-  },
+  // Zalogowana osoba (zweryfikowana sesja Supabase) – bez niej 401, zanim dotkniemy bazy.
+  getSession: () => getApiSession(),
   getStore: getKnowledgeStore,
 });
 

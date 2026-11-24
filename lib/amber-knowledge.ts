@@ -357,7 +357,7 @@ export type UploadEvent =
   | { typ: "blad"; etap: UploadStage; komunikat: string };
 
 export function createUploadApi(deps: {
-  getSession: (req: Request) => unknown | null;
+  getSession: (req: Request) => unknown | Promise<unknown>;
   getStore: () => KnowledgeStore | null;
 }) {
   const headers = { "Cache-Control": "no-store" };
@@ -376,7 +376,7 @@ export function createUploadApi(deps: {
 
   return {
     async GET(req: Request): Promise<Response> {
-      if (!deps.getSession(req)) return json({ komunikat: KNOWLEDGE_MESSAGES.unauthorized }, 401);
+      if (!(await deps.getSession(req))) return json({ komunikat: KNOWLEDGE_MESSAGES.unauthorized }, 401);
       const store = deps.getStore();
       if (!store) return json({ komunikat: KNOWLEDGE_MESSAGES.notConfigured }, 503);
       try {
@@ -388,7 +388,7 @@ export function createUploadApi(deps: {
     },
 
     async DELETE(req: Request): Promise<Response> {
-      if (!deps.getSession(req)) return json({ komunikat: KNOWLEDGE_MESSAGES.unauthorized }, 401);
+      if (!(await deps.getSession(req))) return json({ komunikat: KNOWLEDGE_MESSAGES.unauthorized }, 401);
       const body = (await readBody(req)) as { id?: unknown } | null;
       const id = body && typeof body === "object" ? body.id : undefined;
       if (typeof id !== "number" || !Number.isInteger(id) || id <= 0) return json({ komunikat: KNOWLEDGE_MESSAGES.badRequest }, 400);
@@ -404,7 +404,7 @@ export function createUploadApi(deps: {
     },
 
     async POST(req: Request): Promise<Response> {
-      if (!deps.getSession(req)) return json({ komunikat: KNOWLEDGE_MESSAGES.unauthorized }, 401);
+      if (!(await deps.getSession(req))) return json({ komunikat: KNOWLEDGE_MESSAGES.unauthorized }, 401);
       const body = await readBody(req);
       if (body === null) return json({ komunikat: KNOWLEDGE_MESSAGES.badRequest }, 400);
       const check = checkUploadInput(body);
