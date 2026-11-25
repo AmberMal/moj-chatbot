@@ -16,3 +16,10 @@ export function userFromMetadata(metadata: unknown): { name: string | null; avat
   return { name: text(m.full_name, 80) ?? text(m.name, 80), avatarUrl: httpsUrl(m.avatar_url) ?? httpsUrl(m.picture) };
 }
 
+
+// Warsztat 3 (Standard): pierwsza litera imienia (albo e-maila) do kółka zamiast zdjęcia.
+export function userInitial(name: string | null | undefined, email: string | null | undefined): string {
+  const source = (name ?? "").trim() || (email ?? "").trim();
+  const letter = Array.from(source).find((ch) => /\p{L}|\p{N}/u.test(ch));
+  return letter ? letter.toLocaleUpperCase("pl-PL") : "?";
+}

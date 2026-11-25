@@ -148,7 +148,18 @@ check("Imię i avatar: zapasowo name + picture", JSON.stringify(userFromMetadata
 check("Konto e-mail (bez danych Google) → bez imienia i avatara", JSON.stringify(userFromMetadata({ email_verified: true })) === JSON.stringify({ name: null, avatarUrl: null }) && JSON.stringify(userFromMetadata(null)) === JSON.stringify({ name: null, avatarUrl: null }));
 check("Avatar tylko https (bez javascript:, http:)", userFromMetadata({ avatar_url: "javascript:alert(1)" }).avatarUrl === null && userFromMetadata({ picture: "http://x/y.png" }).avatarUrl === null);
 const chatFile2 = read("app/chat.tsx");
-check("Nagłówek: zwykły znacznik img z avatarem i imię", chatFile2.includes('<img className="user-avatar" src={avatarUrl}') && chatFile2.includes('className="user-name"'));
+check("Nagłówek: zwykły znacznik img z avatarem i imię", chatFile2.includes('className="user-avatar"') && chatFile2.includes('src={avatarUrl}') && chatFile2.includes('<img') && chatFile2.includes('className="user-name"'));
+
+console.log("\n=== 8. Warsztat 3 (Standard) ===");
+const { userInitial } = await import("../lib/amber-user-info.ts");
+check("Kółko z literą: imię, potem e-mail, wielka litera", userInitial("malwina m", "x@y.pl") === "M" && userInitial(null, "ola@x.pl") === "O" && userInitial(" ", "") === "?" && userInitial("łucja", null) === "Ł");
+const cb = read("app/auth/callback/route.ts");
+check("Callback: imię z Google do profilu tylko gdy brak imienia, getUser(), klient tej osoby, ta sama kontrola co zapiszProfil",
+  cb.includes("auth.getUser()") && cb.includes("createUserStores(route.client).profile") && cb.includes("!(await profile.load()).name") && cb.includes("checkProfileInput({ imie: googleName })") &&
+  cb.indexOf("exchangeCodeForSession") < cb.indexOf("auth.getUser()"));
+check("Callback: błąd zapisu profilu nie blokuje logowania (try/catch, potem przekierowanie)", /try \{[\s\S]*getUser[\s\S]*\} catch[\s\S]*return route\.redirect\(`\$\{origin\}\$\{next\}`\)/.test(cb));
+const ch = read("app/chat.tsx");
+check("Nagłówek: kółko z literą bez zdjęcia albo gdy się nie wczyta", ch.includes("user-initial") && ch.includes("onError={() => setAvatarFailed(true)}") && ch.includes("userInitial(name, email)"));
 
 console.log(`\nWynik: ${ok} zaliczonych, ${bad} niezaliczonych.`);
 process.exitCode = bad === 0 ? 0 : 1;

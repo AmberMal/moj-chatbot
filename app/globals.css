@@ -585,3 +585,4 @@ h1 { margin: 0; font-size: 26px; }
 .user-text { display: flex; flex-direction: column; min-width: 0; }
 .user-name { font-weight: 600; overflow-wrap: anywhere; }
 .user-info .user-email { margin-right: 0; }
+.user-initial { display: inline-flex; align-items: center; justify-content: center; background: #F0C143; color: #111; font-weight: 700; font-size: 15px; }

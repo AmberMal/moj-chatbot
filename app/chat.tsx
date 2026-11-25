@@ -4,6 +4,7 @@ import { useChat } from "@ai-sdk/react";
 import Link from "next/link";
 import { DefaultChatTransport, type UIMessage } from "ai";
 import { createSupabaseBrowserClient } from "../lib/supabase-auth/client";
+import { userInitial } from "../lib/amber-user-info";
 import { Fragment, useEffect, useRef, useState, type ChangeEvent, type FormEvent } from "react";
 import {
   AGENT_API,
@@ -145,6 +146,8 @@ export default function Chat({
   const imageRequestRef = useRef(false);
   // Odpowiedzi na prośbę o obraz, w których model nie wywołał narzędzia generujObraz.
   const [noImageIds, setNoImageIds] = useState<string[]>([]);
+  // Warsztat 3 (Standard): zdjęcie z Google się nie wczytało → kółko z literą.
+  const [avatarFailed, setAvatarFailed] = useState(false);
   const [analyses, setAnalyses] = useState<JsonAnalysis[]>([]);
   const isAnalyzing = analyses.some((item) => item.status === "loading");
   // Odpowiedzi zatrzymane limitem 5 kroków (komunikat pod odpowiedzią).
@@ -421,9 +424,22 @@ export default function Chat({
       <div className="toolbar">
         {/* Lekcja 7: zalogowana osoba – Warsztat 3: imię i avatar z konta Google (konto e-mail: sam adres) */}
         <span className="user-info">
-          {avatarUrl && (
+          {/* Warsztat 3 (Standard): zdjęcie z Google, a bez niego (albo gdy się nie wczyta) – kółko z pierwszą literą */}
+          {avatarUrl && !avatarFailed ? (
             // eslint-disable-next-line @next/next/no-img-element
-            <img className="user-avatar" src={avatarUrl} alt="" width={32} height={32} referrerPolicy="no-referrer" />
+            <img
+              className="user-avatar"
+              src={avatarUrl}
+              alt=""
+              width={32}
+              height={32}
+              referrerPolicy="no-referrer"
+              onError={() => setAvatarFailed(true)}
+            />
+          ) : (
+            <span className="user-avatar user-initial" aria-hidden="true">
+              {userInitial(name, email)}
+            </span>
           )}
           <span className="user-text">
             {name && <span className="user-name">{name}</span>}
