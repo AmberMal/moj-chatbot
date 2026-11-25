@@ -69,7 +69,7 @@ const routes = ["app/api/agent/route.ts", "app/api/conversations/latest/route.ts
 check("Każdy endpoint: użytkownik z lib/auth (getApiSession / getCurrentUser)", routes.every((r) => /getApiSession\(\)|getCurrentUser\(\)/.test(read(r))));
 check("Żaden endpoint nie bierze użytkownika z formularza ani adresu", routes.every((r) => !/userId|user_id|searchParams\.get\("user/.test(read(r))));
 const auth = read("lib/auth.ts");
-check("Serwer weryfikuje sesję przez getClaims (nie getSession)", auth.includes("supabase.auth.getClaims()") && !auth.includes("auth.getSession("));
+check("Serwer weryfikuje sesję przez getUser() – pyta Supabase, wylogowanie działa od razu (nie getSession, nie getClaims)", auth.includes("supabase.auth.getUser()") && !auth.includes("auth.getSession(") && !auth.includes("auth.getClaims()"));
 check("Proxy: getClaims, plik proxy.ts z funkcją proxy", read("lib/supabase-auth/proxy.ts").includes("auth.getClaims()") && read("proxy.ts").includes("export async function proxy"));
 check("Brak middleware.ts (Next.js 16 – proxy.ts)", !existsSync(new URL("../middleware.ts", import.meta.url)));
 const pages = ["app/page.tsx", "app/history/page.tsx", "app/profile/page.tsx", "app/upload/page.tsx", "app/dashboard/page.tsx"];
