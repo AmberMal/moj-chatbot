@@ -295,6 +295,17 @@ function dbError(action: string, error: { message?: string }) {
 }
 
 export function createSupabaseKnowledgeDb(client: SupabaseClient): KnowledgeDb {
+  // Lekcja 7 (wspólna baza firmy): dokumenty oznaczone w bazie jako „wspolny” może CZYTAĆ każdy zalogowany
+  // (wyszukiwanie searchKnowledge). Zarządzanie (lista na /upload, zastępowanie po tytule, uzupełnianie
+  // embeddingów) – tylko własne dokumenty. Właściciel z sesji (getUser), nigdy z zapytania.
+  let ownerPromise: Promise<string | null> | null = null;
+  const ownerId = () =>
+    (ownerPromise ??= client.auth.getUser().then(({ data }) => data.user?.id ?? null, () => null));
+  async function requireOwner(action: string): Promise<string> {
+    const id = await ownerId();
+    if (!id) throw dbError(action, { message: "brak zalogowanej osoby" });
+    return id;
+  }
   return {
     async insertDocument(title) {
       const { data, error } = await client.from("documents").insert({ title }).select("id").single();
@@ -311,9 +322,11 @@ export function createSupabaseKnowledgeDb(client: SupabaseClient): KnowledgeDb {
       return Array.isArray(data) && data.length > 0;
     },
     async findChunksWithoutEmbedding(limit) {
+      const owner = await requireOwner("fragmenty bez embeddingu");
       const { data, error } = await client
         .from("chunks")
         .select("id, document_id, content")
+        .eq("user_id", owner)
         .is("embedding", null)
         .order("id", { ascending: true })
         .limit(limit);
@@ -330,9 +343,11 @@ export function createSupabaseKnowledgeDb(client: SupabaseClient): KnowledgeDb {
     },
     async listDocuments() {
       // chunks(count) – liczba fragmentów z powiązanej tabeli (relacja document_id).
+      const owner = await requireOwner("lista dokumentów");
       const { data, error } = await client
         .from("documents")
         .select("id, title, created_at, chunks(count)")
+        .eq("user_id", owner)
         .order("created_at", { ascending: false });
       if (error) throw dbError("lista dokumentów", error);
       return ((data ?? []) as { id: unknown; title: unknown; created_at: unknown; chunks: unknown }[]).map((row) => {
@@ -346,7 +361,8 @@ export function createSupabaseKnowledgeDb(client: SupabaseClient): KnowledgeDb {
       });
     },
     async findDocumentIdsByTitle(title) {
-      const { data, error } = await client.from("documents").select("id").eq("title", title);
+      const owner = await requireOwner("szukanie po tytule");
+      const { data, error } = await client.from("documents").select("id").eq("user_id", owner).eq("title", title);
       if (error) throw dbError("szukanie po tytule", error);
       return ((data ?? []) as { id: unknown }[]).map((row) => Number(row.id));
     },

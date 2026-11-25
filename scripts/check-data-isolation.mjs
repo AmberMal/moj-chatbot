@@ -19,7 +19,8 @@ if (!SB_URL || !SB_KEY || !SB_SECRET) {
 }
 
 const rows = [];
-const add = (group, attempt, answer, verdict, note = "") => rows.push({ group, attempt, answer: String(answer), verdict, note });
+const add = (group, attempt, answer, verdict, note = "") =>
+  rows.push({ group, attempt, answer: String(answer), verdict: verdict === true ? "ok" : verdict === false ? "bad" : verdict, note });
 
 function makeBrowser() {
   const jar = new Map();
@@ -163,6 +164,35 @@ try {
       injChunk ? "" : "jak wyżej – polityka nie sprawdza właściciela dokumentu");
     const { data: aMsgs } = await A.client.from("messages").select("content").eq("conversation_id", conv.id);
     add("2. B bezpośrednio w bazie", "kontrola: co widzi A w swojej rozmowie", `${aMsgs?.length ?? 0} wiadomości`, (aMsgs ?? []).every((m) => !m.content.includes("wiadomość B")) ? "ok" : "bad");
+  }
+
+  // --- 3. Wspólna baza wiedzy firmy (kolumna documents.wspolny – ustawia ją tylko panel Supabase) ---
+  {
+    const SHARED = `WSPOLNY-${randomUUID().slice(0, 8)}`;
+    const { data: sdoc, error: sdErr } = await A.client.from("documents").insert({ title: `Wspólny A ${SHARED}` }).select("id").single();
+    if (sdErr) throw new Error(`A: wspólny dokument – ${sdErr.message}`);
+    const svec = Array.from({ length: 1536 }, (_, i) => (i === 1 ? 1 : 0));
+    await A.client.from("chunks").insert({ document_id: sdoc.id, chunk_index: 0, content: `Fragment wspólny ${SHARED}`, embedding: svec });
+    const { error: markErr } = await admin.from("documents").update({ wspolny: true }).eq("id", sdoc.id);
+    add("3. Wspólna baza firmy", "oznaczenie dokumentu A jako wspólny (panel/administrator)", markErr ? `błąd (${markErr.code})` : "OK", !markErr, markErr ? "uruchom najpierw SQL z kolumną wspolny" : "");
+    const { data: bSee } = await B.client.from("documents").select("id").eq("id", sdoc.id);
+    add("3. Wspólna baza firmy", "B czyta wspólny dokument", `${bSee?.length ?? 0} wierszy`, (bSee?.length ?? 0) === 1);
+    const { data: bFound } = await B.client.rpc("match_chunks", { query_embedding: svec, match_count: 3 });
+    add("3. Wspólna baza firmy", "B znajduje wspólny fragment (searchKnowledge)", (bFound ?? []).some((f) => String(f.content).includes(SHARED)) ? "tak" : "nie", (bFound ?? []).some((f) => String(f.content).includes(SHARED)));
+    const { data: bUpd } = await B.client.from("documents").update({ title: "przejęte" }).eq("id", sdoc.id).select("id");
+    add("3. Wspólna baza firmy", "B zmienia wspólny dokument", `${bUpd?.length ?? 0} zmienionych`, (bUpd?.length ?? 0) === 0);
+    const { data: bDel } = await B.client.from("documents").delete().eq("id", sdoc.id).select("id");
+    add("3. Wspólna baza firmy", "B usuwa wspólny dokument", `${bDel?.length ?? 0} usuniętych`, (bDel?.length ?? 0) === 0);
+    const { data: cUpd } = await B.client.from("chunks").update({ content: "przejęte" }).eq("document_id", sdoc.id).select("id");
+    add("3. Wspólna baza firmy", "B zmienia wspólny fragment", `${cUpd?.length ?? 0} zmienionych`, (cUpd?.length ?? 0) === 0);
+    const { error: bIns } = await B.client.from("documents").insert({ title: "podrzucam wszystkim", wspolny: true });
+    add("3. Wspólna baza firmy", "B dodaje własny dokument jako wspólny", bIns ? `odmowa (${bIns.code})` : "PRZYJĘTE", Boolean(bIns));
+    const { data: bOwn } = await B.client.from("documents").insert({ title: `Własny B ${SHARED}` }).select("id").single();
+    const { error: bMark } = bOwn ? await B.client.from("documents").update({ wspolny: true }).eq("id", bOwn.id) : { error: { code: "brak" } };
+    add("3. Wspólna baza firmy", "B oznacza swój dokument jako wspólny", bMark ? `odmowa (${bMark.code})` : "PRZYJĘTE", Boolean(bMark));
+    const rList = await hit("/api/upload", { cookie: B.cookie() });
+    const listText = await rList.text();
+    add("3. Wspólna baza firmy", "lista /upload u B (tylko własne)", `${rList.status}, ${listText.includes(SHARED) && listText.includes("Wspólny A") ? "widzi wspólny dokument A" : "bez dokumentu A"}`, rList.status === 200 && !listText.includes("Wspólny A"));
   }
 } catch (error) {
   add("Błąd", "przerwano sprawdzanie", error instanceof Error ? error.message : String(error), "bad");
