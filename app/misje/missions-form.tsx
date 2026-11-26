@@ -9,6 +9,13 @@ function readReport(data: unknown): MissionReport | null {
   return raport && typeof raport.tytul === "string" && Array.isArray(raport.sekcje) ? raport : null;
 }
 
+// Data i godzina wykonania – w strefie czasowej przeglądarki, np. „26.11.2026, 18:50”.
+function formatDone(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleString("pl-PL", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
 export default function MissionsForm({ missions }: { missions: PublicMission[] }) {
   const [missionId, setMissionId] = useState(missions[0]?.id ?? "");
   const [values, setValues] = useState<Record<string, string>>({});
@@ -145,20 +152,35 @@ export default function MissionsForm({ missions }: { missions: PublicMission[] }
               )}
               {s.typ === "linki" &&
                 (s.linki.length > 0 ? (
-                  <ul>
-                    {s.linki.map((l) => (
-                      <li key={l.url}>
-                        <a href={l.url} target="_blank" rel="noopener noreferrer">
-                          {l.tytul}
-                        </a>
-                      </li>
-                    ))}
-                  </ul>
+                  s.numerowane ? (
+                    // Standard: ponumerowane źródła – numery w [ ] przy faktach wskazują pozycję na tej liście.
+                    <ol className="mission-sources">
+                      {s.linki.map((l, i) => (
+                        <li key={l.url}>
+                          [{i + 1}]{" "}
+                          <a href={l.url} target="_blank" rel="noopener noreferrer">
+                            {l.tytul}
+                          </a>
+                        </li>
+                      ))}
+                    </ol>
+                  ) : (
+                    <ul>
+                      {s.linki.map((l) => (
+                        <li key={l.url}>
+                          <a href={l.url} target="_blank" rel="noopener noreferrer">
+                            {l.tytul}
+                          </a>
+                        </li>
+                      ))}
+                    </ul>
+                  )
                 ) : (
                   <p className="hint">{s.brak}</p>
                 ))}
             </section>
           ))}
+          {report.wykonano && <p className="mission-time">Misja wykonana: {formatDone(report.wykonano)}</p>}
         </article>
       )}
     </div>

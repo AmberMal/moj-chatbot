@@ -4,8 +4,8 @@ import { readFileSync } from "node:fs";
 import {
   MISSIONS, MISSION_MESSAGES, MAX_TOPIC_CHARS, NO_SOURCES_TEXT, RAPORT_INSTRUCTIONS,
   publicMissions, findMission, readMissionFields, collectSources, validateRaportOutput, buildRaport, stripUrls,
-  createMissionHandler, parseCriteria, checkComparisonFields, normalizeCell, validateComparisonOutput, buildComparison,
-  COMPARISON_INSTRUCTIONS, NO_DATA,
+  createMissionHandler, RAPORT_RESEARCH_INSTRUCTIONS, NO_BASIS_TEXT, parseCriteria, checkComparisonFields, normalizeCell, validateComparisonOutput, buildComparison,
+  COMPARISON_INSTRUCTIONS, COMPARISON_RESEARCH_INSTRUCTIONS, NO_DATA,
 } from "../lib/amber-missions.ts";
 
 let ok = 0, bad = 0;
@@ -27,17 +27,7 @@ check("Temat 201 znaków → komunikat", !readMissionFields(raport, { temat: "a"
 check("Temat 200 znaków → OK", readMissionFields(raport, { temat: "a".repeat(200) }).ok);
 check("Temat nie-tekst → błąd", !readMissionFields(raport, { temat: 5 }).ok && !readMissionFields(raport, null).ok);
 
-// --- walidator wyniku
-const good = { podsumowanie: ["Zdanie 1.", "Zdanie 2.", "Zdanie 3."], informacje: ["a", "b", "c", "d"], wnioski: ["w1", "w2"] };
-check("Poprawny wynik przechodzi", validateRaportOutput(good).success);
-check("Podsumowanie ≠ 3 zdania → odrzucone", !validateRaportOutput({ ...good, podsumowanie: ["a", "b"] }).success);
-check("Informacje: 3 → odrzucone, 7 → odrzucone", !validateRaportOutput({ ...good, informacje: ["a", "b", "c"] }).success && !validateRaportOutput({ ...good, informacje: Array(7).fill("x") }).success);
-check("Wnioski: 1 → odrzucone, 4 → odrzucone", !validateRaportOutput({ ...good, wnioski: ["a"] }).success && !validateRaportOutput({ ...good, wnioski: ["a", "b", "c", "d"] }).success);
-check("Adres strony w tekście modelu jest usuwany", stripUrls("Zobacz https://zmyslone.example/x i www.fake.com teraz") === "Zobacz i teraz");
-const v = validateRaportOutput({ ...good, informacje: ["Fakt (https://wymyslony.pl/a)", "b", "c", "d"] });
-check("Walidator usuwa linki z punktów", v.success && !v.value.informacje[0].includes("http"));
-
-// --- źródła tylko z wyszukiwania
+// --- walidator wyniku (Standard: Fakty z numerami źródeł, Czego nie udało się ustalić)
 const srcs = collectSources([
   { sourceType: "url", url: "https://gov.uk/smoke", title: "GOV.UK" },
   { sourceType: "url", url: "https://gov.uk/smoke", title: "duplikat" },
@@ -46,12 +36,27 @@ const srcs = collectSources([
   { sourceType: "url", url: "http://example.org/a" },
 ]);
 check("Źródła: tylko http(s), bez powtórzeń, bez dokumentów", srcs.length === 2 && srcs[0].url === "https://gov.uk/smoke" && srcs[1].tytul === "example.org");
-const rep = buildRaport(good, { temat: "T" }, srcs);
-check("Raport: sekcje w kolejności Podsumowanie, Najważniejsze informacje, Wnioski, Źródła", rep.sekcje.map((s) => s.tytul).join("|") === "Podsumowanie|Najważniejsze informacje|Wnioski|Źródła");
-check("Źródła = linki z wyszukiwania", rep.sekcje[3].typ === "linki" && rep.sekcje[3].linki.length === 2 && !rep.sekcje[3].brak);
-const repEmpty = buildRaport(good, { temat: "T" }, []);
-check("Brak wyników wyszukiwania → raport mówi to wprost", repEmpty.sekcje[3].brak === NO_SOURCES_TEXT && /nie zwróciło/.test(NO_SOURCES_TEXT));
-check("Instrukcja: temat = dane, tylko z wyszukiwania, bez linków, wprost gdy brak", /DANE/.test(RAPORT_INSTRUCTIONS) && /WYŁĄCZNIE na podstawie/.test(RAPORT_INSTRUCTIONS) && /Nie wpisuj adresów/.test(RAPORT_INSTRUCTIONS) && /napisz to wprost/.test(RAPORT_INSTRUCTIONS));
+const facts = [{ tekst: "F1.", zrodlo: 1 }, { tekst: "F2.", zrodlo: 2 }, { tekst: "F3.", zrodlo: 1 }, { tekst: "F4.", zrodlo: 2 }];
+const good = { podsumowanie: ["Zdanie 1.", "Zdanie 2.", "Zdanie 3."], fakty: facts, nieustalone: ["Brak danych o cenach."], wnioski: ["w1", "w2"] };
+const V = (o, s2 = srcs) => validateRaportOutput(o, { temat: "T" }, s2);
+check("Poprawny wynik przechodzi", V(good).success);
+check("Podsumowanie ≠ 3 zdania → odrzucone", !V({ ...good, podsumowanie: ["a", "b"] }).success);
+check("Fakty: 3 → odrzucone, 7 → odrzucone", !V({ ...good, fakty: facts.slice(0, 3) }).success && !V({ ...good, fakty: [...facts, ...facts.slice(0, 3)] }).success);
+check("Fakt z numerem spoza listy źródeł → odrzucony", !V({ ...good, fakty: [...facts.slice(0, 3), { tekst: "X", zrodlo: 3 }] }).success && !V({ ...good, fakty: [...facts.slice(0, 3), { tekst: "X", zrodlo: 0 }] }).success);
+check("Bez źródeł: fakty puste OK, z faktami → odrzucone", V({ ...good, fakty: [] }, []).success && !V(good, []).success);
+check("Czego nie udało się ustalić: 1–3", !V({ ...good, nieustalone: [] }).success && !V({ ...good, nieustalone: ["a", "b", "c", "d"] }).success);
+check("Wnioski: 1 → odrzucone, 4 → odrzucone", !V({ ...good, wnioski: ["a"] }).success && !V({ ...good, wnioski: ["a", "b", "c", "d"] }).success);
+check("Adres strony w tekście modelu jest usuwany", stripUrls("Zobacz https://zmyslone.example/x i www.fake.com teraz") === "Zobacz i teraz");
+const v = V({ ...good, fakty: [{ tekst: "Fakt (https://wymyslony.pl/a) [7]", zrodlo: 1 }, ...facts.slice(1)] });
+check("Walidator usuwa linki i numery dopisane przez model", v.success && v.value.fakty[0].tekst === "Fakt");
+const rep = buildRaport(v.value, { temat: "T" }, srcs);
+check("Raport: Podsumowanie, Fakty, Czego nie udało się ustalić, Wnioski, Źródła", rep.sekcje.map((s) => s.tytul).join("|") === "Podsumowanie|Fakty|Czego nie udało się ustalić|Wnioski|Źródła");
+check("Każdy fakt kończy się numerem źródła [n]", rep.sekcje[1].typ === "lista" && rep.sekcje[1].punkty.every((p) => /\[\d+\]$/.test(p)) && rep.sekcje[1].punkty[1] === "F2. [2]");
+check("Źródła ponumerowane = linki z wyszukiwania", rep.sekcje[4].typ === "linki" && rep.sekcje[4].numerowane === true && rep.sekcje[4].linki.length === 2 && !rep.sekcje[4].brak);
+const repEmpty = buildRaport(V({ ...good, fakty: [] }, []).value, { temat: "T" }, []);
+check("Brak wyników wyszukiwania → raport mówi to wprost", repEmpty.sekcje[4].brak === NO_SOURCES_TEXT && /nie zwróciło/.test(NO_SOURCES_TEXT) && repEmpty.sekcje[1].typ === "tekst");
+check("Instrukcja: dane, tylko z notatek, numery z listy, wnioski = interpretacje", /DANE/.test(RAPORT_INSTRUCTIONS) && /WYŁĄCZNIE na podstawie notatek/.test(RAPORT_INSTRUCTIONS) && /tylko numerów z tej listy/.test(RAPORT_INSTRUCTIONS) && /wyłącznie Twoje interpretacje/.test(RAPORT_INSTRUCTIONS));
+check("Raport w dwóch krokach: zbieranie z wyszukiwaniem, potem pola", !!raport.zbieranie && /adres strony/.test(RAPORT_RESEARCH_INSTRUCTIONS) && /\[1\] GOV\.UK – https:\/\/gov\.uk\/smoke/.test(raport.prompt({ temat: "T" }, { notatki: "n", zrodla: srcs })));
 
 // --- endpoint
 const post = (body) => new Request("http://localhost/api/missions", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
@@ -84,9 +89,10 @@ const deps = (extra = {}) => ({
   check("Zły JSON → 400", res.status === 400);
 }
 {
-  const res = await createMissionHandler(deps())(post({ misja: "raport", pola: { temat: "Czujniki dymu" } }));
+  const res = await createMissionHandler(deps({ now: () => new Date("2026-11-26T18:50:00Z") }))(post({ misja: "raport", pola: { temat: "Czujniki dymu" } }));
   const data = await res.json();
-  check("Misja OK → raport, agent dostał wyszukiwanie", res.status === 200 && data.raport.sekcje.length === 4 && lastTools && "web_search" in lastTools && lastStep === 6);
+  check("Misja OK → raport, agent dostał wyszukiwanie", res.status === 200 && data.raport.sekcje.length === 5 && lastTools && "web_search" in lastTools && lastStep === 6);
+  check("Pod wynikiem: data i godzina wykonania", data.raport.wykonano === "2026-11-26T18:50:00.000Z");
 }
 {
   const res = await createMissionHandler(deps({ createModel: () => null }))(post({ misja: "raport", pola: { temat: "x" } }));
@@ -124,18 +130,27 @@ const out = { wiersze: [
   { kryterium: "cena", wartosci: ["od £200", "0", "brak danych"] },
   { kryterium: "aplikacja mobilna", wartosci: ["tak", "tak", "tak"] },
   { kryterium: "gwarancja", wartosci: ["2 lata", "", "5 lat"] },
-], rekomendacja: { firma: "ajax", uzasadnienie: "Najlepsza aplikacja (https://x.example)." } };
-const vc = validateComparisonOutput(out, P);
+], rekomendacja: { podstawy: true, firma: "ajax", warunek: "rozbudowanej aplikacji mobilnej", uzasadnienie: "Ma najwięcej funkcji w aplikacji (https://x.example)." } };
+const vc = validateComparisonOutput(out, P, srcs);
 check("Poprawny wynik porównania przechodzi", vc.success);
 check("Zero i puste → „brak danych”, linki usunięte, nazwa firmy z formularza", vc.success && vc.value.wiersze[0].wartosci[1] === NO_DATA && vc.value.wiersze[2].wartosci[1] === NO_DATA && vc.value.rekomendacja.firma === "Ajax" && !vc.value.rekomendacja.uzasadnienie.includes("http"));
-check("Brakujący wiersz → odrzucone", !validateComparisonOutput({ ...out, wiersze: out.wiersze.slice(0, 2) }, P).success);
-check("Inne kryterium niż wpisane → odrzucone", !validateComparisonOutput({ ...out, wiersze: [{ ...out.wiersze[0], kryterium: "jakość" }, ...out.wiersze.slice(1)] }, P).success);
-check("Firma bez oceny (2 wartości) → odrzucone", !validateComparisonOutput({ ...out, wiersze: [{ kryterium: "cena", wartosci: ["a", "b"] }, ...out.wiersze.slice(1)] }, P).success);
-check("Rekomendacja spoza trzech firm → odrzucona", !validateComparisonOutput({ ...out, rekomendacja: { firma: "Bosch", uzasadnienie: "x" } }, P).success);
+check("Brakujący wiersz → odrzucone", !validateComparisonOutput({ ...out, wiersze: out.wiersze.slice(0, 2) }, P, srcs).success);
+check("Inne kryterium niż wpisane → odrzucone", !validateComparisonOutput({ ...out, wiersze: [{ ...out.wiersze[0], kryterium: "jakość" }, ...out.wiersze.slice(1)] }, P, srcs).success);
+check("Firma bez oceny (2 wartości) → odrzucone", !validateComparisonOutput({ ...out, wiersze: [{ kryterium: "cena", wartosci: ["a", "b"] }, ...out.wiersze.slice(1)] }, P, srcs).success);
+check("Rekomendacja spoza trzech firm → odrzucona", !validateComparisonOutput({ ...out, rekomendacja: { ...out.rekomendacja, firma: "Bosch" } }, P, srcs).success);
+check("Rekomendacja bez warunku → odrzucona", !validateComparisonOutput({ ...out, rekomendacja: { ...out.rekomendacja, warunek: " " } }, P, srcs).success);
+const many = { ...out, wiersze: out.wiersze.map((w, i) => ({ ...w, wartosci: i === 1 ? w.wartosci : ["brak danych", "0", ""] })) };
+const vm = validateComparisonOutput(many, P, srcs);
+check("Za dużo „brak danych” → brak podstaw do rekomendacji (wymusza serwer)", vm.success && vm.value.rekomendacja.podstawy === false && buildComparison(vm.value, P, srcs).sekcje[1].tekst === NO_BASIS_TEXT);
+const vn = validateComparisonOutput({ ...out, rekomendacja: { podstawy: false, firma: "", warunek: "", uzasadnienie: "Za mało danych." } }, P, srcs);
+check("Agent sam pisze „brak podstaw” → przechodzi", vn.success && buildComparison(vn.value, P, srcs).sekcje[1].tekst === NO_BASIS_TEXT);
 const cr = buildComparison(vc.value, P, srcs);
 check("Tabela z pól: firmy w kolumnach, kryteria w wierszach", cr.sekcje[0].typ === "tabela" && cr.sekcje[0].kolumny.join() === "Ajax,Texecom,Pyronix" && cr.sekcje[0].wiersze.map((w) => w.kryterium).join() === "cena,aplikacja mobilna,gwarancja");
-check("Pod tabelą: rekomendacja, potem źródła z wyszukiwania", cr.sekcje[1].tytul === "Rekomendacja" && cr.sekcje[1].tekst.startsWith("Ajax – ") && cr.sekcje[2].typ === "linki" && cr.sekcje[2].linki.length === 2);
-check("Instrukcja: dane, każda firma osobno, „brak danych”, bez zera, bez linków", /DANE/.test(COMPARISON_INSTRUCTIONS) && /KAŻDEJ z trzech firm/.test(COMPARISON_INSTRUCTIONS) && /„brak danych”/.test(COMPARISON_INSTRUCTIONS) && /nie wpisuj zera/.test(COMPARISON_INSTRUCTIONS) && /Nie wpisuj adresów/.test(COMPARISON_INSTRUCTIONS));
+check("Pod tabelą: rekomendacja, potem źródła z wyszukiwania", cr.sekcje[1].tytul === "Rekomendacja" && cr.sekcje[1].tekst === "Ajax – najlepszy wybór, jeśli zależy Ci na rozbudowanej aplikacji mobilnej. Ma najwięcej funkcji w aplikacji." && cr.sekcje[2].typ === "linki" && cr.sekcje[2].linki.length === 2);
+const v0 = validateComparisonOutput(out, P, []);
+check("Bez źródeł z wyszukiwania → wszystkie komórki „brak danych” i brak podstaw do rekomendacji", v0.success && v0.value.wiersze.every((w) => w.wartosci.every((c) => c === NO_DATA)) && buildComparison(v0.value, P, []).sekcje[1].tekst === NO_BASIS_TEXT);
+check("Porównanie w dwóch krokach: zbieranie o każdej firmie, potem tabela z notatek", !!cmp.zbieranie && /KAŻDEJ z trzech firm/.test(COMPARISON_RESEARCH_INSTRUCTIONS) && /adres strony/.test(COMPARISON_RESEARCH_INSTRUCTIONS) && /WYŁĄCZNIE na podstawie notatek/.test(COMPARISON_INSTRUCTIONS) && /<notatki>[\s\S]*<zrodla>/.test(cmp.prompt(P, { notatki: "n", zrodla: srcs })));
+check("Instrukcja: dane, „brak danych”, bez zera, bez linków", /DANE/.test(COMPARISON_INSTRUCTIONS) && /„brak danych”/.test(COMPARISON_INSTRUCTIONS) && /nie wpisuj zera/.test(COMPARISON_INSTRUCTIONS) && /Nie wpisuj adresów/.test(COMPARISON_INSTRUCTIONS));
 check("Prompt: firmy i kryteria w znacznikach", /<firmy>[\s\S]*Texecom[\s\S]*<\/firmy>/.test(cmp.prompt(P)) && /<kryteria>[\s\S]*gwarancja/.test(cmp.prompt(P)));
 {
   modelCalls = 0;
@@ -156,6 +171,7 @@ const page = read("app/misje/page.tsx");
 check("Strona /misje tylko dla zalogowanych", /getCurrentUser/.test(page) && /redirect\(loginUrl\("\/misje"\)\)/.test(page) && /force-dynamic/.test(page));
 const form = read("app/misje/missions-form.tsx");
 check("Formularz: „Uruchom misję”, „Agent pracuje…”, blokada, komunikat błędu", /Uruchom misję/.test(form) && /Agent pracuje…/.test(form) && /disabled=\{pending/.test(form) && /setError/.test(form) && /finally/.test(form));
+check("Formularz: data wykonania i ponumerowane źródła", /Misja wykonana:/.test(form) && /mission-sources/.test(form) && /\[\{i \+ 1\}\]/.test(form));
 check("Formularz: tabela i wyszarzone „brak danych”", /mission-table/.test(form) && /no-data/.test(form));
 check("Formularz: klikalne linki w nowej karcie", /target="_blank" rel="noopener noreferrer"/.test(form));
 check("Link „Misje” w nawigacji", /href="\/misje"[^>]*>\s*Misje/.test(read("app/chat.tsx")));
