@@ -6,6 +6,7 @@ import {
   publicMissions, findMission, readMissionFields, collectSources, validateRaportOutput, buildRaport, stripUrls,
   createMissionHandler, RAPORT_RESEARCH_INSTRUCTIONS, NO_BASIS_TEXT, parseCriteria, checkComparisonFields, normalizeCell, validateComparisonOutput, buildComparison,
   COMPARISON_INSTRUCTIONS, COMPARISON_RESEARCH_INSTRUCTIONS, NO_DATA,
+  VISIT_INSTRUCTIONS, VISIT_SIGNATURE, NO_KB_SOURCES_TEXT, validateVisitOutput, buildVisit,
 } from "../lib/amber-missions.ts";
 import { reportToText } from "../lib/amber-mission-text.ts";
 
@@ -15,7 +16,7 @@ const read = (p) => readFileSync(new URL(`../${p}`, import.meta.url), "utf8");
 
 // --- lista misji
 const raport = findMission("raport");
-check("Lista misji: „Raport” i „Porównanie trzech firm”", MISSIONS.length === 2 && raport?.nazwa === "Raport" && findMission("porownanie")?.nazwa === "Porównanie trzech firm");
+check("Lista misji: Raport, Porównanie trzech firm, Notatka z wizyty", MISSIONS.length === 3 && raport?.nazwa === "Raport" && findMission("porownanie")?.nazwa === "Porównanie trzech firm" && findMission("wizyta")?.nazwa === "Notatka z wizyty");
 check("Każda misja ma nazwę, opis, pola, instrukcję", MISSIONS.every((m) => m.nazwa && m.opis && m.pola.length > 0 && m.instrukcja));
 check("Przeglądarka dostaje misje bez instrukcji", publicMissions().every((m) => !("instrukcja" in m) && !("schema" in m)));
 check("Raport: jedno pole „temat”, najwyżej 200 znaków", raport.pola.length === 1 && raport.pola[0].name === "temat" && raport.pola[0].maxLength === 200 && MAX_TOPIC_CHARS === 200);
@@ -171,6 +172,39 @@ check("Kopiuj jako tekst (porównanie): tytuł, dla kogo, tabela w wierszach, re
 const tRep = reportToText(rep, fmt);
 check("Kopiuj jako tekst (raport): fakty z numerami, ponumerowane źródła", /FAKTY\n- Fakt \[1\]\n- F2\. \[2\]/.test(tRep) && /\[2\] example\.org – http:\/\/example\.org\/a/.test(tRep) && !/<|>/.test(tRep));
 
+// --- Warsztat 3: Notatka z wizyty (baza wiedzy, bez internetu)
+const wiz = findMission("wizyta");
+check("Wizyta: jedno pole wieloliniowe, do 4000 znaków, opis widoczny", wiz.pola.length === 1 && wiz.pola[0].multiline === true && wiz.pola[0].maxLength === 4000 && wiz.opis.length > 20);
+check("Wizyta: bez internetu, z bazą wiedzy", wiz.wyszukiwanie === false && wiz.bazaWiedzy === true && !wiz.zbieranie);
+const frag = [{ tytul: "Cennik Amber Security", tresc: "Wymiana baterii w centrali: £45 + VAT. Przegląd roczny od £120.", podobienstwo: 0.7 }];
+const wp = wiz.prompt({ notatki: "bateria słaba" }, { notatki: "", zrodla: [], fragmenty: frag });
+check("Wizyta: notatki i fragmenty bazy jako dane w znacznikach", /<notatki_z_wizyty>\nbateria słaba\n<\/notatki_z_wizyty>/.test(wp) && /Dokument: Cennik Amber Security/.test(wp));
+check("Wizyta: brak fragmentów → widoczne „brak pasujących fragmentów”", /brak pasujących fragmentów/.test(wiz.prompt({ notatki: "x" }, { notatki: "", zrodla: [], fragmenty: [] })));
+const vgood = { zrobione: ["Sprawdzono centralę Texecom.", "Bateria w centrali słaba."], zalecenia: ["Wymiana baterii w centrali."], szkic: `Dzień dobry,\nwymiana baterii kosztuje £45 + VAT.\n${VISIT_SIGNATURE}`, zrodla: ["Cennik Amber Security"] };
+check("Wizyta: poprawny wynik przechodzi", validateVisitOutput(vgood, {}, [], frag).success);
+check("Wizyta: kwota spoza bazy → odrzucona", !validateVisitOutput({ ...vgood, szkic: `Koszt £60.\n${VISIT_SIGNATURE}` }, {}, [], frag).success);
+check("Wizyta: kwota z bazy bez źródła → odrzucona", !validateVisitOutput({ ...vgood, zrodla: [] }, {}, [], frag).success);
+check("Wizyta: źródło spoza wyników bazy → odrzucone", !validateVisitOutput({ ...vgood, zrodla: ["Cennik konkurencji"] }, {}, [], frag).success);
+check("Wizyta: [DO UZUPEŁNIENIA] bez źródła przechodzi", validateVisitOutput({ ...vgood, szkic: `Cena: [DO UZUPEŁNIENIA: cena czujki].\n${VISIT_SIGNATURE}`, zrodla: [] }, {}, [], []).success);
+check("Wizyta: szkic bez podpisu → odrzucony", !validateVisitOutput({ ...vgood, szkic: "Dzień dobry." }, {}, [], frag).success);
+check("Wizyta: brak zaleceń / za dużo punktów → odrzucone", !validateVisitOutput({ ...vgood, zalecenia: [] }, {}, [], frag).success && !validateVisitOutput({ ...vgood, zrobione: Array(9).fill("x") }, {}, [], frag).success);
+const vr = buildVisit(validateVisitOutput(vgood, {}, [], frag).value);
+check("Wizyta: sekcje Co zrobiono / co znaleziono, Zalecenia, Szkic, Źródła z bazy wiedzy", vr.sekcje.map((x) => x.tytul).join("|") === "Co zrobiono / co znaleziono|Zalecenia|Szkic wiadomości do klienta|Źródła z bazy wiedzy" && vr.sekcje[3].punkty[0] === "📎 Cennik Amber Security");
+check("Wizyta: szkic zachowuje podpis w osobnej linii", vr.sekcje[2].tekst.endsWith(`\n${VISIT_SIGNATURE}`));
+check("Wizyta: bez źródeł → „Brak – …”", buildVisit(validateVisitOutput({ ...vgood, szkic: `Dziękujemy.\n${VISIT_SIGNATURE}`, zrodla: [] }, {}, [], []).value).sekcje[3].tekst === NO_KB_SOURCES_TEXT);
+check("Instrukcja wizyty: dane, ceny tylko z bazy, DO UZUPEŁNIENIA, bez obietnic i telefonów", /DANE/.test(VISIT_INSTRUCTIONS) && /WYŁĄCZNIE z pasujących fragmentów/.test(VISIT_INSTRUCTIONS) && /\[DO UZUPEŁNIENIA/.test(VISIT_INSTRUCTIONS) && /Niczego nie obiecuj/.test(VISIT_INSTRUCTIONS) && /niezwłocznie/.test(VISIT_INSTRUCTIONS) && /numerów telefonu/.test(VISIT_INSTRUCTIONS));
+{
+  let searched = 0, gotSearch = null, gotTools = null;
+  const kb = async () => { searched++; return { ok: true, fragmenty: frag }; };
+  const d = deps({ searchKnowledge: kb, run: async ({ tools, searchKnowledge }) => { gotTools = tools; gotSearch = searchKnowledge; return { ok: true, raport: vr }; } });
+  const res = await createMissionHandler({ ...d, getSession: () => null })(post({ misja: "wizyta", pola: { notatki: "x" } }));
+  check("Wizyta: bez zalogowania → 401, bez bazy i modelu", res.status === 401 && searched === 0);
+  const ok = await createMissionHandler(d)(post({ misja: "wizyta", pola: { notatki: "bateria słaba" } }));
+  check("Wizyta: agent dostaje tylko bazę wiedzy – bez wyszukiwania w internecie", ok.status === 200 && gotSearch === kb && gotTools && Object.keys(gotTools).length === 0);
+  const noKb = await createMissionHandler(deps({ searchKnowledge: null }))(post({ misja: "wizyta", pola: { notatki: "x" } }));
+  check("Wizyta: brak bazy wiedzy → 500 z komunikatem", noKb.status === 500);
+}
+
 // --- pliki
 const lib = read("lib/amber-missions.ts");
 check("Misje: limit kroków jak w czacie (AGENT_STEP_LIMIT), 60 s", /isStepCount\(stepLimit\)/.test(lib) && /stepLimit: AGENT_STEP_LIMIT/.test(read("app/api/missions/route.ts")) && /MISSION_TIMEOUT_MS = 60_000/.test(lib));
@@ -179,13 +213,14 @@ const model = read("lib/model.ts");
 check("lib/model.ts: webSearchTool z ustawieniami czatu", /export function webSearchTool/.test(model) && /maxResults: 3, engine: "native"/.test(model));
 check("Czat korzysta z tego samego wyszukiwania", /web_search: createWebSearchTool\(openrouter\)/.test(read("app/api/agent/route.ts")));
 const route = read("app/api/missions/route.ts");
-check("Endpoint: sesja, model, wyszukiwanie", /getApiSession/.test(route) && /webSearchTool\(\)/.test(route) && /force-dynamic/.test(route));
+check("Endpoint: sesja, model, wyszukiwanie, baza wiedzy", /getApiSession/.test(route) && /webSearchTool\(\)/.test(route) && /force-dynamic/.test(route) && /searchKnowledge\(query/.test(route) && /createSupabaseServerClient/.test(route));
 const page = read("app/misje/page.tsx");
 check("Strona /misje tylko dla zalogowanych", /getCurrentUser/.test(page) && /redirect\(loginUrl\("\/misje"\)\)/.test(page) && /force-dynamic/.test(page));
 const form = read("app/misje/missions-form.tsx");
 check("Formularz: „Uruchom misję”, „Agent pracuje…”, blokada, komunikat błędu", /Uruchom misję/.test(form) && /Agent pracuje…/.test(form) && /disabled=\{pending/.test(form) && /setError/.test(form) && /finally/.test(form));
 check("Formularz: data wykonania i ponumerowane źródła", /Misja wykonana:/.test(form) && /mission-sources/.test(form) && /\[\{i \+ 1\}\]/.test(form));
 check("Formularz: „Kopiuj jako tekst” przy wyniku obu misji", /Kopiuj jako tekst/.test(form) && /reportToText\(report\)/.test(form) && /Skopiowano ✓/.test(form));
+check("Formularz: pole wieloliniowe (textarea)", /field\.multiline \?/.test(form) && /<textarea/.test(form));
 check("Formularz: tabela i wyszarzone „brak danych”", /mission-table/.test(form) && /no-data/.test(form));
 check("Formularz: klikalne linki w nowej karcie", /target="_blank" rel="noopener noreferrer"/.test(form));
 check("Link „Misje” w nawigacji", /href="\/misje"[^>]*>\s*Misje/.test(read("app/chat.tsx")));

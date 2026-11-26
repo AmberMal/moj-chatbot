@@ -638,3 +638,6 @@ h1 { margin: 0; font-size: 26px; }
 .triage-page .hint { margin: 0; text-align: left; }
 .mission-audience { margin: -4px 0 8px; color: var(--muted); }
 .mission-copy { margin-top: 12px; }
+/* Lekcja 8, W3: pole wieloliniowe i szkic z zachowanymi liniami */
+.mission-field textarea { width: 100%; box-sizing: border-box; padding: 10px 12px; border: 1px solid #d9d4c7; border-radius: 10px; font: inherit; background: #fff; resize: vertical; }
+.mission-report section p { white-space: pre-wrap; }

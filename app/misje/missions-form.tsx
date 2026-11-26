@@ -4,7 +4,7 @@ import { useState, type FormEvent } from "react";
 import type { MissionReport, PublicMission } from "../../lib/amber-missions";
 import { formatMissionDate, reportToText } from "../../lib/amber-mission-text";
 
-// Lekcja 8, Warsztat 2: wybór misji (Raport, Porównanie trzech firm), formularz z pól misji i raport. Tylko podgląd – bez zapisu i wysyłania.
+// Lekcja 8, Warsztaty 2–3: wybór misji (Raport, Porównanie trzech firm, Notatka z wizyty), formularz z pól misji i raport. Tylko podgląd – bez zapisu i wysyłania.
 function readReport(data: unknown): MissionReport | null {
   const raport = (data as { raport?: unknown } | null)?.raport as MissionReport | undefined;
   return raport && typeof raport.tytul === "string" && Array.isArray(raport.sekcje) ? raport : null;
@@ -90,14 +90,25 @@ export default function MissionsForm({ missions }: { missions: PublicMission[] }
           {mission.pola.map((field) => (
             <label key={field.name} className="mission-field">
               {field.label}
-              <input
-                type="text"
-                value={values[field.name] ?? ""}
-                maxLength={field.maxLength}
-                placeholder={field.placeholder}
-                disabled={pending}
-                onChange={(e) => setValues((v) => ({ ...v, [field.name]: e.target.value }))}
-              />
+              {field.multiline ? (
+                <textarea
+                  rows={10}
+                  value={values[field.name] ?? ""}
+                  maxLength={field.maxLength}
+                  placeholder={field.placeholder}
+                  disabled={pending}
+                  onChange={(e) => setValues((v) => ({ ...v, [field.name]: e.target.value }))}
+                />
+              ) : (
+                <input
+                  type="text"
+                  value={values[field.name] ?? ""}
+                  maxLength={field.maxLength}
+                  placeholder={field.placeholder}
+                  disabled={pending}
+                  onChange={(e) => setValues((v) => ({ ...v, [field.name]: e.target.value }))}
+                />
+              )}
               <small>
                 {field.hint ? `${field.hint} ` : ""}
                 {(values[field.name] ?? "").length}/{field.maxLength}
