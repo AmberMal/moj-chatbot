@@ -641,3 +641,9 @@ h1 { margin: 0; font-size: 26px; }
 /* Lekcja 8, W3: pole wieloliniowe i szkic z zachowanymi liniami */
 .mission-field textarea { width: 100%; box-sizing: border-box; padding: 10px 12px; border: 1px solid #d9d4c7; border-radius: 10px; font: inherit; background: #fff; resize: vertical; }
 .mission-report section p { white-space: pre-wrap; }
+.mission-contract h2 { margin: 0 0 6px; font-size: 20px; }
+.mission-contract details { background: #fff; border: 1px solid #e6e1d4; border-radius: 12px; padding: 10px 14px; margin-bottom: 12px; }
+.mission-contract summary { cursor: pointer; font-weight: 600; }
+.mission-contract dl { margin: 10px 0 0; }
+.mission-contract dt { font-weight: 600; margin-top: 8px; }
+.mission-contract dd { margin: 2px 0 0; color: var(--muted); }

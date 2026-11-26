@@ -6,7 +6,7 @@ import {
   publicMissions, findMission, readMissionFields, collectSources, validateRaportOutput, buildRaport, stripUrls,
   createMissionHandler, RAPORT_RESEARCH_INSTRUCTIONS, NO_BASIS_TEXT, parseCriteria, checkComparisonFields, normalizeCell, validateComparisonOutput, buildComparison,
   COMPARISON_INSTRUCTIONS, COMPARISON_RESEARCH_INSTRUCTIONS, NO_DATA,
-  VISIT_INSTRUCTIONS, VISIT_SIGNATURE, NO_KB_SOURCES_TEXT, validateVisitOutput, buildVisit,
+  VISIT_INSTRUCTIONS, VISIT_SIGNATURE, NO_KB_SOURCES_TEXT, VISIT_MISSING_TEXT, validateVisitOutput, buildVisit,
 } from "../lib/amber-missions.ts";
 import { reportToText } from "../lib/amber-mission-text.ts";
 
@@ -180,7 +180,7 @@ const frag = [{ tytul: "Cennik Amber Security", tresc: "Wymiana baterii w centra
 const wp = wiz.prompt({ notatki: "bateria słaba" }, { notatki: "", zrodla: [], fragmenty: frag });
 check("Wizyta: notatki i fragmenty bazy jako dane w znacznikach", /<notatki_z_wizyty>\nbateria słaba\n<\/notatki_z_wizyty>/.test(wp) && /Dokument: Cennik Amber Security/.test(wp));
 check("Wizyta: brak fragmentów → widoczne „brak pasujących fragmentów”", /brak pasujących fragmentów/.test(wiz.prompt({ notatki: "x" }, { notatki: "", zrodla: [], fragmenty: [] })));
-const vgood = { zrobione: ["Sprawdzono centralę Texecom.", "Bateria w centrali słaba."], zalecenia: ["Wymiana baterii w centrali."], szkic: `Dzień dobry,\nwymiana baterii kosztuje £45 + VAT.\n${VISIT_SIGNATURE}`, zrodla: ["Cennik Amber Security"] };
+const vgood = { status: "ok", brakuje: [], dane: { klient: "p. Wiśniewska", obiekt: "dom jednorodzinny", rodzaj: "oględziny", sprzet: "" }, zrobione: ["Sprawdzono centralę Texecom.", "Bateria w centrali słaba."], zalecenia: ["Wymiana baterii w centrali."], szkic: `Dzień dobry,\nwymiana baterii kosztuje £45 + VAT.\n${VISIT_SIGNATURE}`, zrodla: ["Cennik Amber Security"] };
 check("Wizyta: poprawny wynik przechodzi", validateVisitOutput(vgood, {}, [], frag).success);
 check("Wizyta: kwota spoza bazy → odrzucona", !validateVisitOutput({ ...vgood, szkic: `Koszt £60.\n${VISIT_SIGNATURE}` }, {}, [], frag).success);
 check("Wizyta: kwota z bazy bez źródła → odrzucona", !validateVisitOutput({ ...vgood, zrodla: [] }, {}, [], frag).success);
@@ -189,19 +189,28 @@ check("Wizyta: [DO UZUPEŁNIENIA] bez źródła przechodzi", validateVisitOutput
 check("Wizyta: szkic bez podpisu → odrzucony", !validateVisitOutput({ ...vgood, szkic: "Dzień dobry." }, {}, [], frag).success);
 check("Wizyta: brak zaleceń / za dużo punktów → odrzucone", !validateVisitOutput({ ...vgood, zalecenia: [] }, {}, [], frag).success && !validateVisitOutput({ ...vgood, zrobione: Array(9).fill("x") }, {}, [], frag).success);
 const vr = buildVisit(validateVisitOutput(vgood, {}, [], frag).value);
-check("Wizyta: sekcje Co zrobiono / co znaleziono, Zalecenia, Szkic, Źródła z bazy wiedzy", vr.sekcje.map((x) => x.tytul).join("|") === "Co zrobiono / co znaleziono|Zalecenia|Szkic wiadomości do klienta|Źródła z bazy wiedzy" && vr.sekcje[3].punkty[0] === "📎 Cennik Amber Security");
-check("Wizyta: szkic zachowuje podpis w osobnej linii", vr.sekcje[2].tekst.endsWith(`\n${VISIT_SIGNATURE}`));
-check("Wizyta: bez źródeł → „Brak – …”", buildVisit(validateVisitOutput({ ...vgood, szkic: `Dziękujemy.\n${VISIT_SIGNATURE}`, zrodla: [] }, {}, [], []).value).sekcje[3].tekst === NO_KB_SOURCES_TEXT);
+check("Wizyta: sekcje Dane wizyty, Co zrobiono / co znaleziono, Zalecenia, Szkic, Źródła z bazy wiedzy", vr.sekcje.map((x) => x.tytul).join("|") === "Dane wizyty|Co zrobiono / co znaleziono|Zalecenia|Szkic wiadomości do klienta|Źródła z bazy wiedzy" && vr.sekcje[4].punkty[0] === "📎 Cennik Amber Security");
+check("Wizyta: brakująca informacja → „brak danych”", vr.sekcje[0].punkty.join("|") === "Klient: p. Wiśniewska|Obiekt / adres: dom jednorodzinny|Rodzaj wizyty: oględziny|System i sprzęt: brak danych");
+check("Wizyta: szkic zachowuje podpis w osobnej linii", vr.sekcje[3].tekst.endsWith(`\n${VISIT_SIGNATURE}`));
+check("Wizyta: bez źródeł → „Brak – …”", buildVisit(validateVisitOutput({ ...vgood, szkic: `Dziękujemy.\n${VISIT_SIGNATURE}`, zrodla: [] }, {}, [], []).value).sekcje[4].tekst === NO_KB_SOURCES_TEXT);
+const vbad = validateVisitOutput({ status: "niewystarczajace", brakuje: ["co zrobiono lub znaleziono", "jaki system lub sprzęt"], dane: { klient: "", obiekt: "", rodzaj: "", sprzet: "" }, zrobione: [], zalecenia: [], szkic: "", zrodla: [] }, {}, [], []);
+const vbr = vbad.success ? buildVisit(vbad.value) : null;
+check("Wizyta: dane nie na temat → „Czego brakuje” i prośba o uzupełnienie, bez szkicu", vbr && vbr.sekcje.map((x) => x.tytul).join("|") === "Czego brakuje|Co dalej" && vbr.sekcje[1].tekst === VISIT_MISSING_TEXT && !JSON.stringify(vbr).includes("Szkic"));
+check("Wizyta: „niewystarczajace” bez listy braków → odrzucone", !validateVisitOutput({ status: "niewystarczajace", brakuje: [] }, {}, [], []).success);
+check("Wizyta: zły status → odrzucone", !validateVisitOutput({ ...vgood, status: "może" }, {}, [], frag).success);
+check("Wizyta: za krótkie notatki → komunikat bez modelu, co dopisać", !readMissionFields(wiz, { notatki: "alarm" }).ok && /Dopisz, co zrobiono/.test(readMissionFields(wiz, { notatki: "alarm" }).komunikat) && readMissionFields(wiz, { notatki: "serwis alarmu, wymieniono baterię w centrali Texecom" }).ok);
+check("Wizyta: kontrakt (cel, narzędzia, wynik, kontrola) dostępny w przeglądarce", ["cel", "narzedzia", "wynik", "kontrola"].every((k) => publicMissions().find((m) => m.id === "wizyta").kontrakt?.[k]?.length > 10));
+check("Instrukcja wizyty: nie zgaduj przy danych nie na temat, „brak danych”", /nie zgaduj/.test(VISIT_INSTRUCTIONS) && /niewystarczajace/.test(VISIT_INSTRUCTIONS) && /„brak danych”/.test(VISIT_INSTRUCTIONS));
 check("Instrukcja wizyty: dane, ceny tylko z bazy, DO UZUPEŁNIENIA, bez obietnic i telefonów", /DANE/.test(VISIT_INSTRUCTIONS) && /WYŁĄCZNIE z pasujących fragmentów/.test(VISIT_INSTRUCTIONS) && /\[DO UZUPEŁNIENIA/.test(VISIT_INSTRUCTIONS) && /Niczego nie obiecuj/.test(VISIT_INSTRUCTIONS) && /niezwłocznie/.test(VISIT_INSTRUCTIONS) && /numerów telefonu/.test(VISIT_INSTRUCTIONS));
 {
   let searched = 0, gotSearch = null, gotTools = null;
   const kb = async () => { searched++; return { ok: true, fragmenty: frag }; };
   const d = deps({ searchKnowledge: kb, run: async ({ tools, searchKnowledge }) => { gotTools = tools; gotSearch = searchKnowledge; return { ok: true, raport: vr }; } });
-  const res = await createMissionHandler({ ...d, getSession: () => null })(post({ misja: "wizyta", pola: { notatki: "x" } }));
+  const res = await createMissionHandler({ ...d, getSession: () => null })(post({ misja: "wizyta", pola: { notatki: "serwis: bateria w centrali słaba, czujka w kuchni" } }));
   check("Wizyta: bez zalogowania → 401, bez bazy i modelu", res.status === 401 && searched === 0);
-  const ok = await createMissionHandler(d)(post({ misja: "wizyta", pola: { notatki: "bateria słaba" } }));
+  const ok = await createMissionHandler(d)(post({ misja: "wizyta", pola: { notatki: "serwis: bateria w centrali słaba, czujka w kuchni" } }));
   check("Wizyta: agent dostaje tylko bazę wiedzy – bez wyszukiwania w internecie", ok.status === 200 && gotSearch === kb && gotTools && Object.keys(gotTools).length === 0);
-  const noKb = await createMissionHandler(deps({ searchKnowledge: null }))(post({ misja: "wizyta", pola: { notatki: "x" } }));
+  const noKb = await createMissionHandler(deps({ searchKnowledge: null }))(post({ misja: "wizyta", pola: { notatki: "serwis: bateria w centrali słaba, czujka w kuchni" } }));
   check("Wizyta: brak bazy wiedzy → 500 z komunikatem", noKb.status === 500);
 }
 
@@ -220,6 +229,7 @@ const form = read("app/misje/missions-form.tsx");
 check("Formularz: „Uruchom misję”, „Agent pracuje…”, blokada, komunikat błędu", /Uruchom misję/.test(form) && /Agent pracuje…/.test(form) && /disabled=\{pending/.test(form) && /setError/.test(form) && /finally/.test(form));
 check("Formularz: data wykonania i ponumerowane źródła", /Misja wykonana:/.test(form) && /mission-sources/.test(form) && /\[\{i \+ 1\}\]/.test(form));
 check("Formularz: „Kopiuj jako tekst” przy wyniku obu misji", /Kopiuj jako tekst/.test(form) && /reportToText\(report\)/.test(form) && /Skopiowano ✓/.test(form));
+check("Formularz: rozwijany opis misji (cel, narzędzia, wynik, kontrola)", /<details>/.test(form) && /Jak działa ta misja/.test(form) && /Sprawdź przed użyciem/.test(form));
 check("Formularz: pole wieloliniowe (textarea)", /field\.multiline \?/.test(form) && /<textarea/.test(form));
 check("Formularz: tabela i wyszarzone „brak danych”", /mission-table/.test(form) && /no-data/.test(form));
 check("Formularz: klikalne linki w nowej karcie", /target="_blank" rel="noopener noreferrer"/.test(form));

@@ -85,6 +85,26 @@ export default function MissionsForm({ missions }: { missions: PublicMission[] }
         ))}
       </div>
 
+      {mission?.kontrakt && (
+        // Standard (W3): kontrakt misji – cel, narzędzia, format wyniku, co sprawdzić przed użyciem.
+        <div className="mission-contract">
+          <h2>{mission.nazwa}</h2>
+          <details>
+            <summary>Jak działa ta misja</summary>
+            <dl>
+              <dt>Cel</dt>
+              <dd>{mission.kontrakt.cel}</dd>
+              <dt>Narzędzia</dt>
+              <dd>{mission.kontrakt.narzedzia}</dd>
+              <dt>Wynik</dt>
+              <dd>{mission.kontrakt.wynik}</dd>
+              <dt>Sprawdź przed użyciem</dt>
+              <dd>{mission.kontrakt.kontrola}</dd>
+            </dl>
+          </details>
+        </div>
+      )}
+
       {mission && (
         <form className="triage-form" onSubmit={handleSubmit}>
           {mission.pola.map((field) => (
