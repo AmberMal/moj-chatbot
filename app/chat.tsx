@@ -470,6 +470,10 @@ export default function Chat({
         <Link href="/email-triage" className="logout">
           Triage
         </Link>
+        {/* Lekcja 8, Warsztat 2: misje agenta */}
+        <Link href="/misje" className="logout">
+          Misje
+        </Link>
         <button type="button" className="logout" onClick={handleLogout}>
           Wyloguj
         </button>

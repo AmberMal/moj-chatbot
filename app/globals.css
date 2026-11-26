@@ -612,3 +612,16 @@ h1 { margin: 0; font-size: 26px; }
 .triage-summary .priority-mid { background: #fcefc6; }
 .triage-summary .priority-low { background: #e3efe0; }
 .triage-source { margin: 0; font-size: 0.9rem; color: var(--muted); }
+
+/* Lekcja 8, Warsztat 2: misje */
+.mission-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; }
+.mission-choice { display: flex; flex-direction: column; gap: 4px; text-align: left; padding: 12px 14px; border: 1px solid #e6e1d4; border-radius: 12px; background: #fff; font: inherit; cursor: pointer; }
+.mission-choice.active { border-color: #e2b93b; box-shadow: 0 0 0 2px #f3dd8c; }
+.mission-choice span { color: var(--muted); font-size: 0.9em; }
+.mission-field { display: flex; flex-direction: column; gap: 6px; }
+.mission-field input { padding: 10px 12px; border: 1px solid #d9d4c7; border-radius: 10px; font: inherit; background: #fff; }
+.mission-field small { color: var(--muted); font-weight: 400; align-self: flex-end; }
+.mission-report { margin-top: 20px; background: #fff; border: 1px solid #e6e1d4; border-radius: 14px; padding: 16px 20px; }
+.mission-report h2 { margin-top: 0; }
+.mission-report h3 { margin-bottom: 6px; }
+.mission-report a { word-break: break-word; }

@@ -38,3 +38,17 @@ export function getEmbedder(): ((values: string[]) => Promise<number[][]>) | nul
     return embeddings;
   };
 }
+
+// Lekcja 8, Warsztat 2: wyszukiwanie w internecie w JEDNYM miejscu – używa go czat (/api/agent) i misje (/api/missions).
+// Te same ustawienia co dotąd w czacie: 3 wyniki, wyszukiwarka dostawcy modelu („native”).
+export const WEB_SEARCH_SETTINGS = { maxResults: 3, engine: "native" } as const;
+
+export function createWebSearchTool(openrouter: ReturnType<typeof createOpenRouter>) {
+  return openrouter.tools.webSearch(WEB_SEARCH_SETTINGS);
+}
+
+// null = brak klucza OpenRouter w .env.local.
+export function webSearchTool() {
+  const openrouter = getOpenRouter();
+  return openrouter ? createWebSearchTool(openrouter) : null;
+}

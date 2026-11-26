@@ -2,6 +2,7 @@ import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import { after } from "next/server";
 import type { ToolSet } from "ai";
 import { getApiSession } from "../../../lib/auth";
+import { createWebSearchTool } from "../../../lib/model";
 import {
   AMBER_ANALYZE_INSTRUCTIONS,
   AMBER_CHAT_INSTRUCTIONS,
@@ -67,7 +68,7 @@ export async function POST(req: Request) {
       });
 
       const tools: ToolSet = {
-        web_search: openrouter.tools.webSearch({ maxResults: 3, engine: "native" }),
+        web_search: createWebSearchTool(openrouter),
         sprawdzObszar,
         informacjeOUrzadzeniu,
         generujObraz: createImageTool({
