@@ -3,7 +3,7 @@
 import { useState, type FormEvent } from "react";
 import type { MissionReport, PublicMission } from "../../lib/amber-missions";
 
-// Lekcja 8, Warsztat 2: wybór misji, formularz z pól misji i raport. Tylko podgląd – bez zapisu i wysyłania.
+// Lekcja 8, Warsztat 2: wybór misji (Raport, Porównanie trzech firm), formularz z pól misji i raport. Tylko podgląd – bez zapisu i wysyłania.
 function readReport(data: unknown): MissionReport | null {
   const raport = (data as { raport?: unknown } | null)?.raport as MissionReport | undefined;
   return raport && typeof raport.tytul === "string" && Array.isArray(raport.sekcje) ? raport : null;
@@ -84,6 +84,7 @@ export default function MissionsForm({ missions }: { missions: PublicMission[] }
                 onChange={(e) => setValues((v) => ({ ...v, [field.name]: e.target.value }))}
               />
               <small>
+                {field.hint ? `${field.hint} ` : ""}
                 {(values[field.name] ?? "").length}/{field.maxLength}
               </small>
             </label>
@@ -113,6 +114,34 @@ export default function MissionsForm({ missions }: { missions: PublicMission[] }
                     <li key={i}>{p}</li>
                   ))}
                 </ul>
+              )}
+              {s.typ === "tabela" && (
+                <div className="mission-table-wrap">
+                  <table className="mission-table">
+                    <thead>
+                      <tr>
+                        <th scope="col">Kryterium</th>
+                        {s.kolumny.map((k) => (
+                          <th key={k} scope="col">
+                            {k}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {s.wiersze.map((w) => (
+                        <tr key={w.kryterium}>
+                          <th scope="row">{w.kryterium}</th>
+                          {w.wartosci.map((v, i) => (
+                            <td key={i} className={v === "brak danych" ? "no-data" : undefined}>
+                              {v}
+                            </td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               )}
               {s.typ === "linki" &&
                 (s.linki.length > 0 ? (

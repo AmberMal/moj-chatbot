@@ -4,7 +4,8 @@ import { readFileSync } from "node:fs";
 import {
   MISSIONS, MISSION_MESSAGES, MAX_TOPIC_CHARS, NO_SOURCES_TEXT, RAPORT_INSTRUCTIONS,
   publicMissions, findMission, readMissionFields, collectSources, validateRaportOutput, buildRaport, stripUrls,
-  createMissionHandler,
+  createMissionHandler, parseCriteria, checkComparisonFields, normalizeCell, validateComparisonOutput, buildComparison,
+  COMPARISON_INSTRUCTIONS, NO_DATA,
 } from "../lib/amber-missions.ts";
 
 let ok = 0, bad = 0;
@@ -13,7 +14,7 @@ const read = (p) => readFileSync(new URL(`../${p}`, import.meta.url), "utf8");
 
 // --- lista misji
 const raport = findMission("raport");
-check("Lista misji: jedna misja „Raport”", MISSIONS.length === 1 && raport?.nazwa === "Raport");
+check("Lista misji: „Raport” i „Porównanie trzech firm”", MISSIONS.length === 2 && raport?.nazwa === "Raport" && findMission("porownanie")?.nazwa === "Porównanie trzech firm");
 check("Każda misja ma nazwę, opis, pola, instrukcję", MISSIONS.every((m) => m.nazwa && m.opis && m.pola.length > 0 && m.instrukcja));
 check("Przeglądarka dostaje misje bez instrukcji", publicMissions().every((m) => !("instrukcja" in m) && !("schema" in m)));
 check("Raport: jedno pole „temat”, najwyżej 200 znaków", raport.pola.length === 1 && raport.pola[0].name === "temat" && raport.pola[0].maxLength === 200 && MAX_TOPIC_CHARS === 200);
@@ -108,6 +109,40 @@ const deps = (extra = {}) => ({
   check("Za długo → przerwanie i 504 z komunikatem", aborted && res.status === 504 && /minutę/.test((await res.json()).komunikat));
 }
 
+// --- Porównanie trzech firm
+const cmp = findMission("porownanie");
+check("Porównanie: pola Firma 1–3 i Kryteria", cmp.pola.map((f) => f.name).join() === "firma1,firma2,firma3,kryteria");
+const P = { firma1: "Ajax", firma2: "Texecom", firma3: "Pyronix", kryteria: "cena, aplikacja mobilna ,  gwarancja" };
+check("Kryteria po przecinku", parseCriteria(P.kryteria).join("|") === "cena|aplikacja mobilna|gwarancja");
+check("2–5 kryteriów OK", readMissionFields(cmp, P).ok && readMissionFields(cmp, { ...P, kryteria: "a, b" }).ok && readMissionFields(cmp, { ...P, kryteria: "a,b,c,d,e" }).ok);
+check("1 kryterium → komunikat", !readMissionFields(cmp, { ...P, kryteria: "cena" }).ok && /od 2 do 5/.test(readMissionFields(cmp, { ...P, kryteria: "cena" }).komunikat));
+check("6 kryteriów → komunikat", !readMissionFields(cmp, { ...P, kryteria: "a,b,c,d,e,f" }).ok);
+check("Powtórzone kryteria / te same firmy → komunikat", checkComparisonFields({ ...P, kryteria: "cena, Cena" }) !== null && checkComparisonFields({ ...P, firma2: "ajax" }) !== null);
+check("Brak firmy → komunikat", !readMissionFields(cmp, { ...P, firma3: " " }).ok);
+check("Komórka pusta / „0” / „-” → „brak danych”", normalizeCell("") === NO_DATA && normalizeCell("0") === NO_DATA && normalizeCell("-") === NO_DATA && normalizeCell("od £200") === "od £200");
+const out = { wiersze: [
+  { kryterium: "cena", wartosci: ["od £200", "0", "brak danych"] },
+  { kryterium: "aplikacja mobilna", wartosci: ["tak", "tak", "tak"] },
+  { kryterium: "gwarancja", wartosci: ["2 lata", "", "5 lat"] },
+], rekomendacja: { firma: "ajax", uzasadnienie: "Najlepsza aplikacja (https://x.example)." } };
+const vc = validateComparisonOutput(out, P);
+check("Poprawny wynik porównania przechodzi", vc.success);
+check("Zero i puste → „brak danych”, linki usunięte, nazwa firmy z formularza", vc.success && vc.value.wiersze[0].wartosci[1] === NO_DATA && vc.value.wiersze[2].wartosci[1] === NO_DATA && vc.value.rekomendacja.firma === "Ajax" && !vc.value.rekomendacja.uzasadnienie.includes("http"));
+check("Brakujący wiersz → odrzucone", !validateComparisonOutput({ ...out, wiersze: out.wiersze.slice(0, 2) }, P).success);
+check("Inne kryterium niż wpisane → odrzucone", !validateComparisonOutput({ ...out, wiersze: [{ ...out.wiersze[0], kryterium: "jakość" }, ...out.wiersze.slice(1)] }, P).success);
+check("Firma bez oceny (2 wartości) → odrzucone", !validateComparisonOutput({ ...out, wiersze: [{ kryterium: "cena", wartosci: ["a", "b"] }, ...out.wiersze.slice(1)] }, P).success);
+check("Rekomendacja spoza trzech firm → odrzucona", !validateComparisonOutput({ ...out, rekomendacja: { firma: "Bosch", uzasadnienie: "x" } }, P).success);
+const cr = buildComparison(vc.value, P, srcs);
+check("Tabela z pól: firmy w kolumnach, kryteria w wierszach", cr.sekcje[0].typ === "tabela" && cr.sekcje[0].kolumny.join() === "Ajax,Texecom,Pyronix" && cr.sekcje[0].wiersze.map((w) => w.kryterium).join() === "cena,aplikacja mobilna,gwarancja");
+check("Pod tabelą: rekomendacja, potem źródła z wyszukiwania", cr.sekcje[1].tytul === "Rekomendacja" && cr.sekcje[1].tekst.startsWith("Ajax – ") && cr.sekcje[2].typ === "linki" && cr.sekcje[2].linki.length === 2);
+check("Instrukcja: dane, każda firma osobno, „brak danych”, bez zera, bez linków", /DANE/.test(COMPARISON_INSTRUCTIONS) && /KAŻDEJ z trzech firm/.test(COMPARISON_INSTRUCTIONS) && /„brak danych”/.test(COMPARISON_INSTRUCTIONS) && /nie wpisuj zera/.test(COMPARISON_INSTRUCTIONS) && /Nie wpisuj adresów/.test(COMPARISON_INSTRUCTIONS));
+check("Prompt: firmy i kryteria w znacznikach", /<firmy>[\s\S]*Texecom[\s\S]*<\/firmy>/.test(cmp.prompt(P)) && /<kryteria>[\s\S]*gwarancja/.test(cmp.prompt(P)));
+{
+  modelCalls = 0;
+  const res = await createMissionHandler(deps())(post({ misja: "porownanie", pola: { ...P, kryteria: "cena" } }));
+  check("Endpoint: złe kryteria → 400 bez modelu", res.status === 400 && modelCalls === 0);
+}
+
 // --- pliki
 const lib = read("lib/amber-missions.ts");
 check("Misje: limit kroków jak w czacie (AGENT_STEP_LIMIT), 60 s", /isStepCount\(stepLimit\)/.test(lib) && /stepLimit: AGENT_STEP_LIMIT/.test(read("app/api/missions/route.ts")) && /MISSION_TIMEOUT_MS = 60_000/.test(lib));
@@ -121,6 +156,7 @@ const page = read("app/misje/page.tsx");
 check("Strona /misje tylko dla zalogowanych", /getCurrentUser/.test(page) && /redirect\(loginUrl\("\/misje"\)\)/.test(page) && /force-dynamic/.test(page));
 const form = read("app/misje/missions-form.tsx");
 check("Formularz: „Uruchom misję”, „Agent pracuje…”, blokada, komunikat błędu", /Uruchom misję/.test(form) && /Agent pracuje…/.test(form) && /disabled=\{pending/.test(form) && /setError/.test(form) && /finally/.test(form));
+check("Formularz: tabela i wyszarzone „brak danych”", /mission-table/.test(form) && /no-data/.test(form));
 check("Formularz: klikalne linki w nowej karcie", /target="_blank" rel="noopener noreferrer"/.test(form));
 check("Link „Misje” w nawigacji", /href="\/misje"[^>]*>\s*Misje/.test(read("app/chat.tsx")));
 
