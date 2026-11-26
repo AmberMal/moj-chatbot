@@ -7,6 +7,7 @@ import {
   createMissionHandler, RAPORT_RESEARCH_INSTRUCTIONS, NO_BASIS_TEXT, parseCriteria, checkComparisonFields, normalizeCell, validateComparisonOutput, buildComparison,
   COMPARISON_INSTRUCTIONS, COMPARISON_RESEARCH_INSTRUCTIONS, NO_DATA,
 } from "../lib/amber-missions.ts";
+import { reportToText } from "../lib/amber-mission-text.ts";
 
 let ok = 0, bad = 0;
 const check = (name, cond, extra = "") => { if (cond) { ok++; console.log(`✅ ${name}`); } else { bad++; console.log(`❌ NIE: ${name} ${extra}`); } };
@@ -117,8 +118,8 @@ const deps = (extra = {}) => ({
 
 // --- Porównanie trzech firm
 const cmp = findMission("porownanie");
-check("Porównanie: pola Firma 1–3 i Kryteria", cmp.pola.map((f) => f.name).join() === "firma1,firma2,firma3,kryteria");
-const P = { firma1: "Ajax", firma2: "Texecom", firma3: "Pyronix", kryteria: "cena, aplikacja mobilna ,  gwarancja" };
+check("Porównanie: pola Firma 1–3, Kryteria i „Dla kogo wybieramy”", cmp.pola.map((f) => f.name).join() === "firma1,firma2,firma3,kryteria,dla_kogo" && cmp.pola[4].label === "Dla kogo wybieramy");
+const P = { firma1: "Ajax", firma2: "Texecom", firma3: "Pyronix", kryteria: "cena, aplikacja mobilna ,  gwarancja", dla_kogo: "dla trzyosobowego biura z małym budżetem" };
 check("Kryteria po przecinku", parseCriteria(P.kryteria).join("|") === "cena|aplikacja mobilna|gwarancja");
 check("2–5 kryteriów OK", readMissionFields(cmp, P).ok && readMissionFields(cmp, { ...P, kryteria: "a, b" }).ok && readMissionFields(cmp, { ...P, kryteria: "a,b,c,d,e" }).ok);
 check("1 kryterium → komunikat", !readMissionFields(cmp, { ...P, kryteria: "cena" }).ok && /od 2 do 5/.test(readMissionFields(cmp, { ...P, kryteria: "cena" }).komunikat));
@@ -158,6 +159,18 @@ check("Prompt: firmy i kryteria w znacznikach", /<firmy>[\s\S]*Texecom[\s\S]*<\/
   check("Endpoint: złe kryteria → 400 bez modelu", res.status === 400 && modelCalls === 0);
 }
 
+// --- Dla szybkich: „Dla kogo wybieramy” i „Kopiuj jako tekst”
+check("Brak „Dla kogo” → komunikat", !readMissionFields(cmp, { ...P, dla_kogo: " " }).ok && !readMissionFields(cmp, { ...P, dla_kogo: "a".repeat(151) }).ok);
+check("„Dla kogo” trafia do modelu w obu krokach jako dane", /<dla_kogo>\ndla trzyosobowego biura/.test(cmp.zbieranie.prompt(P)) && /<dla_kogo>/.test(cmp.prompt(P, { notatki: "n", zrodla: srcs })));
+check("Instrukcja: rekomendacja bierze pod uwagę <dla_kogo> i powołuje się na nie", /brać pod uwagę opis z <dla_kogo>/.test(COMPARISON_INSTRUCTIONS) && /powołaj się na ten opis/.test(COMPARISON_INSTRUCTIONS) && /<dla_kogo>/.test(COMPARISON_RESEARCH_INSTRUCTIONS));
+check("Wynik porównania pokazuje „Dla kogo: …”", cr.opis === "Dla kogo: dla trzyosobowego biura z małym budżetem");
+const fmt = () => "26.11.2026, 19:20";
+const tCmp = reportToText({ ...cr, wykonano: "2026-11-26T19:20:00Z" }, fmt);
+check("Kopiuj jako tekst (porównanie): tytuł, dla kogo, tabela w wierszach, rekomendacja, źródła z adresami, data",
+  tCmp.startsWith("Porównanie: Ajax / Texecom / Pyronix\nDla kogo: dla trzyosobowego") && /cena:\n  Ajax – od £200\n  Texecom – brak danych/.test(tCmp) && /REKOMENDACJA\nAjax – najlepszy wybór/.test(tCmp) && /- GOV\.UK – https:\/\/gov\.uk\/smoke/.test(tCmp) && tCmp.endsWith("Misja wykonana: 26.11.2026, 19:20"));
+const tRep = reportToText(rep, fmt);
+check("Kopiuj jako tekst (raport): fakty z numerami, ponumerowane źródła", /FAKTY\n- Fakt \[1\]\n- F2\. \[2\]/.test(tRep) && /\[2\] example\.org – http:\/\/example\.org\/a/.test(tRep) && !/<|>/.test(tRep));
+
 // --- pliki
 const lib = read("lib/amber-missions.ts");
 check("Misje: limit kroków jak w czacie (AGENT_STEP_LIMIT), 60 s", /isStepCount\(stepLimit\)/.test(lib) && /stepLimit: AGENT_STEP_LIMIT/.test(read("app/api/missions/route.ts")) && /MISSION_TIMEOUT_MS = 60_000/.test(lib));
@@ -172,6 +185,7 @@ check("Strona /misje tylko dla zalogowanych", /getCurrentUser/.test(page) && /re
 const form = read("app/misje/missions-form.tsx");
 check("Formularz: „Uruchom misję”, „Agent pracuje…”, blokada, komunikat błędu", /Uruchom misję/.test(form) && /Agent pracuje…/.test(form) && /disabled=\{pending/.test(form) && /setError/.test(form) && /finally/.test(form));
 check("Formularz: data wykonania i ponumerowane źródła", /Misja wykonana:/.test(form) && /mission-sources/.test(form) && /\[\{i \+ 1\}\]/.test(form));
+check("Formularz: „Kopiuj jako tekst” przy wyniku obu misji", /Kopiuj jako tekst/.test(form) && /reportToText\(report\)/.test(form) && /Skopiowano ✓/.test(form));
 check("Formularz: tabela i wyszarzone „brak danych”", /mission-table/.test(form) && /no-data/.test(form));
 check("Formularz: klikalne linki w nowej karcie", /target="_blank" rel="noopener noreferrer"/.test(form));
 check("Link „Misje” w nawigacji", /href="\/misje"[^>]*>\s*Misje/.test(read("app/chat.tsx")));

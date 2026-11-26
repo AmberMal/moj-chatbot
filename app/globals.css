@@ -636,3 +636,5 @@ h1 { margin: 0; font-size: 26px; }
 .mission-time { margin: 16px 0 0; color: var(--muted); font-size: 0.85em; }
 /* Lekcja 8, W2: na stronach misji i triage podpowiedź bez automatycznego marginesu (strona zaczyna się od góry) */
 .triage-page .hint { margin: 0; text-align: left; }
+.mission-audience { margin: -4px 0 8px; color: var(--muted); }
+.mission-copy { margin-top: 12px; }

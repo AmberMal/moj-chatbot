@@ -2,18 +2,12 @@
 
 import { useState, type FormEvent } from "react";
 import type { MissionReport, PublicMission } from "../../lib/amber-missions";
+import { formatMissionDate, reportToText } from "../../lib/amber-mission-text";
 
 // Lekcja 8, Warsztat 2: wybór misji (Raport, Porównanie trzech firm), formularz z pól misji i raport. Tylko podgląd – bez zapisu i wysyłania.
 function readReport(data: unknown): MissionReport | null {
   const raport = (data as { raport?: unknown } | null)?.raport as MissionReport | undefined;
   return raport && typeof raport.tytul === "string" && Array.isArray(raport.sekcje) ? raport : null;
-}
-
-// Data i godzina wykonania – w strefie czasowej przeglądarki, np. „26.11.2026, 18:50”.
-function formatDone(iso: string): string {
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return "";
-  return date.toLocaleString("pl-PL", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 
 export default function MissionsForm({ missions }: { missions: PublicMission[] }) {
@@ -22,6 +16,7 @@ export default function MissionsForm({ missions }: { missions: PublicMission[] }
   const [report, setReport] = useState<MissionReport | null>(null);
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
+  const [copied, setCopied] = useState(false);
   const mission = missions.find((m) => m.id === missionId);
 
   function choose(id: string) {
@@ -38,6 +33,7 @@ export default function MissionsForm({ missions }: { missions: PublicMission[] }
     setPending(true);
     setError("");
     setReport(null);
+    setCopied(false);
     try {
       const response = await fetch("/api/missions", {
         method: "POST",
@@ -56,6 +52,18 @@ export default function MissionsForm({ missions }: { missions: PublicMission[] }
       setError("Brak połączenia z serwerem.");
     } finally {
       setPending(false);
+    }
+  }
+
+  // Dla szybkich: cały wynik jako zwykły tekst do schowka.
+  async function copyReport() {
+    if (!report) return;
+    try {
+      await navigator.clipboard.writeText(reportToText(report));
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      setError("Nie udało się skopiować – zaznacz wynik i skopiuj ręcznie (Cmd+C).");
     }
   }
 
@@ -111,6 +119,7 @@ export default function MissionsForm({ missions }: { missions: PublicMission[] }
       {report && (
         <article className="mission-report">
           <h2>{report.tytul}</h2>
+          {report.opis && <p className="mission-audience">{report.opis}</p>}
           {report.sekcje.map((s) => (
             <section key={s.tytul}>
               <h3>{s.tytul}</h3>
@@ -180,7 +189,10 @@ export default function MissionsForm({ missions }: { missions: PublicMission[] }
                 ))}
             </section>
           ))}
-          {report.wykonano && <p className="mission-time">Misja wykonana: {formatDone(report.wykonano)}</p>}
+          {report.wykonano && <p className="mission-time">Misja wykonana: {formatMissionDate(report.wykonano)}</p>}
+          <button type="button" className="logout mission-copy" onClick={copyReport}>
+            {copied ? "Skopiowano ✓" : "Kopiuj jako tekst"}
+          </button>
         </article>
       )}
     </div>
