@@ -3,13 +3,14 @@
 import { readFileSync } from "node:fs";
 import {
   MAX_TRIAGE_EMAILS, TRIAGE_CATEGORIES, TRIAGE_MESSAGES, TRIAGE_PRIORITIES, TRIAGE_INSTRUCTIONS,
-  createTriageHandler, splitEmails, validateTriageOutput,
+  createTriageHandler, splitEmails, validateTriageOutput, checkTriageSources, fragmentsBlock,
 } from "../lib/amber-triage.ts";
+import { sortTriageCards, triageSummary } from "../lib/amber-triage-view.ts";
 
 let ok = 0, bad = 0;
 const check = (name, cond, extra = "") => { if (cond) { ok++; console.log(`✅ ${name}`); } else { bad++; console.log(`❌ NIE: ${name} ${extra}`); } };
 const read = (p) => readFileSync(new URL(`../${p}`, import.meta.url), "utf8");
-const good = { nadawca: "Jan Kowalski", temat: "Awaria alarmu", kategoria: "problem techniczny", priorytet: "wysoki", uzasadnienie: "System nie działa.", szkic: "Dzień dobry,\nsprawdzimy sprawę.\nZespół obsługi" };
+const good = { nadawca: "Jan Kowalski", temat: "Awaria alarmu", kategoria: "problem techniczny", priorytet: "wysoki", uzasadnienie: "System nie działa.", szkic: "Dzień dobry,\nsprawdzimy sprawę.\nZespół obsługi", zrodla: [] };
 
 console.log("\n=== 1. Podział na maile ===");
 check("Separator --- (sama linia), puste części pominięte", JSON.stringify(splitEmails("A\n---\nB\n\n---\n\n---\nC")) === JSON.stringify(["A", "B", "C"]));
@@ -73,6 +74,35 @@ check("Strona tylko dla zalogowanych, dynamiczna", page.includes('if (!user) red
 check("Formularz: „Posortuj”, „Agent sortuje…”, blokada, „Kopiuj szkic”", form.includes('"Posortuj"') && form.includes("Agent sortuje…") && form.includes("disabled={pending") && form.includes("Kopiuj szkic"));
 check("Brak przycisku „Wyślij” i wysyłania maili", !/Wyślij|mailto:|sendMail|nodemailer/i.test(form + route + read("lib/amber-triage.ts")));
 check("Link „Triage” w nawigacji czatu", chat.includes('href="/email-triage"') && chat.includes("Triage"));
+
+console.log("\n=== 5. Standard: baza wiedzy, znacznik, kolejność, podsumowanie ===");
+const frag = [{ tytul: "Cennik Amber Security", tresc: "Przejęcie systemu od £888 + VAT.", podobienstwo: 0.7 }];
+check("Pole zrodla wymagane (lista)", !validateTriageOutput({ ...good, zrodla: undefined }).success && !validateTriageOutput({ ...good, zrodla: "x" }).success);
+check("Kwota z użytego fragmentu – OK", checkTriageSources({ ...good, szkic: "Koszt od £888 + VAT.\nZespół obsługi", zrodla: ["Cennik Amber Security"] }, frag).length === 0);
+check("Kwota spoza fragmentów (wymyślona) – odrzucona", checkTriageSources({ ...good, szkic: "Koszt 490 zł.\nZespół obsługi", zrodla: [] }, frag).length > 0);
+check("Kwota z fragmentu, ale bez źródła – odrzucona", checkTriageSources({ ...good, szkic: "Koszt £888.\nZespół obsługi", zrodla: [] }, frag).length > 0);
+check("Źródło spoza wyników wyszukiwania – odrzucone", checkTriageSources({ ...good, zrodla: ["Cennik 2026"] }, frag).length > 0);
+check("Znacznik [DO UZUPEŁNIENIA: …] przechodzi bez źródła", checkTriageSources({ ...good, szkic: "Cena: [DO UZUPEŁNIENIA: cena warsztatów].\nZespół obsługi", zrodla: [] }, []).length === 0);
+check("Instrukcja: fragment tylko dla tej samej usługi, znacznik zamiast zmyślania", /tej samej usługi/.test(TRIAGE_INSTRUCTIONS) && /\[DO UZUPEŁNIENIA: czego brakuje\]/.test(TRIAGE_INSTRUCTIONS));
+check("Fragmenty jako dane z tytułem dokumentu", fragmentsBlock(frag).includes("Dokument: Cennik Amber Security") && fragmentsBlock([], "brak").includes("brak pasujących"));
+{
+  const searched = []; const given = [];
+  const h = createTriageHandler({ getSession: async () => ({}), createModel: () => ({}), log: () => {},
+    searchKnowledge: async (q) => { searched.push(q); return { ok: true, fragmenty: frag }; },
+    generate: async ({ fragments }) => { given.push(fragments.length); return { ok: true, output: { ...good, zrodla: ["Cennik Amber Security"] } }; } });
+  const { karty } = await (await h(req({ tekst: "A\n---\nB" }))).json();
+  check("Przed szkicem – wyszukiwanie w bazie dla każdego maila, fragmenty trafiają do modelu", searched.length === 2 && given.every((n) => n === 1));
+  check("Karta niesie źródła", karty[0].zrodla[0] === "Cennik Amber Security");
+  const h2 = createTriageHandler({ getSession: async () => null, createModel: () => ({}), log: () => {}, searchKnowledge: async () => { searched.push("X"); return { ok: true, fragmenty: [] }; }, generate: async () => ({ ok: true, output: good }) });
+  await h2(req({ tekst: "A" }));
+  check("Bez zalogowanej osoby – baza wiedzy nie jest przeszukiwana", !searched.includes("X"));
+}
+{
+  const cards = [{ ok: true, numer: 1, priorytet: "niski" }, { ok: false, numer: 2 }, { ok: true, numer: 3, priorytet: "wysoki" }, { ok: true, numer: 4, priorytet: "średni" }, { ok: true, numer: 5, priorytet: "wysoki" }];
+  check("Kolejność: wysoki → średni → niski, ten sam priorytet wg maili, błędy na końcu", sortTriageCards(cards).map((c) => c.numer).join() === "3,5,4,1,2");
+  check("Podsumowanie: liczby wysoki/średni/niski", JSON.stringify(triageSummary(cards)) === JSON.stringify({ wysoki: 2, średni: 1, niski: 1, bledy: 1 }));
+  check("Formularz: podsumowanie i „📎 Źródło:”", read("app/email-triage/triage-form.tsx").includes("TriageSummary") && read("app/email-triage/triage-form.tsx").includes("📎 Źródło:"));
+}
 
 console.log(`\nWynik: ${ok} zaliczonych, ${bad} niezaliczonych.`);
 process.exitCode = bad === 0 ? 0 : 1;

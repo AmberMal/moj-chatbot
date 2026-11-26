@@ -1,10 +1,11 @@
 "use client";
 
 import { useState, type FormEvent } from "react";
+import { sortTriageCards, triageSummary } from "../../lib/amber-triage-view";
 
 // Lekcja 8, Warsztat 1: formularz misji i karty wyników. Tylko podgląd i „Kopiuj szkic” – bez wysyłania.
 type Card =
-  | { ok: true; numer: number; nadawca: string; temat: string; kategoria: string; priorytet: string; uzasadnienie: string; szkic: string }
+  | { ok: true; numer: number; nadawca: string; temat: string; kategoria: string; priorytet: string; uzasadnienie: string; szkic: string; zrodla: string[] }
   | { ok: false; numer: number; komunikat: string; podglad: string };
 
 function readCards(data: unknown): Card[] | null {
@@ -38,7 +39,8 @@ export default function TriageForm() {
       }
       const result = readCards(data);
       if (!result) setError("Serwer zwrócił nieoczekiwaną odpowiedź.");
-      else setCards(result);
+      // Standard: od najwyższego priorytetu; przy tym samym – kolejność maili.
+      else setCards(sortTriageCards(result));
     } catch {
       setError("Brak połączenia z serwerem.");
     } finally {
@@ -78,6 +80,9 @@ export default function TriageForm() {
         </p>
       )}
       {cards.length > 0 && (
+        <TriageSummary cards={cards} />
+      )}
+      {cards.length > 0 && (
         <ol className="triage-cards">
           {cards.map((card) =>
             card.ok ? (
@@ -94,6 +99,13 @@ export default function TriageForm() {
                 </div>
                 <p className="triage-reason">{card.uzasadnienie}</p>
                 <div className="triage-draft">{card.szkic}</div>
+                {/* Standard: dokumenty z bazy wiedzy, z których szkic skorzystał */}
+                {Array.isArray(card.zrodla) &&
+                  card.zrodla.map((title) => (
+                    <p key={title} className="triage-source">
+                      📎 Źródło: {title}
+                    </p>
+                  ))}
                 <button type="button" className="logout" onClick={() => copy(card)}>
                   {copied === card.numer ? "Skopiowano ✓" : "Kopiuj szkic"}
                 </button>
@@ -113,5 +125,18 @@ export default function TriageForm() {
         </ol>
       )}
     </>
+  );
+}
+
+// Standard: podsumowanie nad kartami – ile maili ma priorytet wysoki, średni i niski.
+function TriageSummary({ cards }: { cards: Card[] }) {
+  const summary = triageSummary(cards);
+  return (
+    <div className="triage-summary" aria-label="Podsumowanie priorytetów">
+      <span className="pill priority-high">wysoki: {summary.wysoki}</span>
+      <span className="pill priority-mid">średni: {summary.średni}</span>
+      <span className="pill priority-low">niski: {summary.niski}</span>
+      {summary.bledy > 0 && <span className="pill">nieudane: {summary.bledy}</span>}
+    </div>
   );
 }

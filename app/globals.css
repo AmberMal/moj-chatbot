@@ -606,3 +606,9 @@ h1 { margin: 0; font-size: 26px; }
 .triage-reason { margin: 0; font-style: italic; color: var(--muted); }
 .triage-draft { white-space: pre-wrap; background: #faf8f2; border-radius: 10px; padding: 10px 12px; }
 .triage-card .logout { align-self: flex-start; }
+.triage-summary { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+.triage-summary .pill { display: inline-block; padding: 4px 12px; border-radius: 999px; background: #f3efe4; font-weight: 600; }
+.triage-summary .priority-high { background: #f8d7d2; }
+.triage-summary .priority-mid { background: #fcefc6; }
+.triage-summary .priority-low { background: #e3efe0; }
+.triage-source { margin: 0; font-size: 0.9rem; color: var(--muted); }
