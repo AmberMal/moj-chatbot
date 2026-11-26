@@ -10,7 +10,7 @@ import { sortTriageCards, triageSummary } from "../lib/amber-triage-view.ts";
 let ok = 0, bad = 0;
 const check = (name, cond, extra = "") => { if (cond) { ok++; console.log(`✅ ${name}`); } else { bad++; console.log(`❌ NIE: ${name} ${extra}`); } };
 const read = (p) => readFileSync(new URL(`../${p}`, import.meta.url), "utf8");
-const good = { nadawca: "Jan Kowalski", temat: "Awaria alarmu", kategoria: "problem techniczny", priorytet: "wysoki", uzasadnienie: "System nie działa.", szkic: "Dzień dobry,\nsprawdzimy sprawę.\nZespół obsługi", zrodla: [] };
+const good = { nadawca: "Jan Kowalski", temat: "Awaria alarmu", kategoria: "awaria i serwis", priorytet: "wysoki", uzasadnienie: "System nie działa.", szkic: "Dzień dobry,\nsprawdzimy sprawę.\nAmber, Amber Security Systems", zrodla: [] };
 
 console.log("\n=== 1. Podział na maile ===");
 check("Separator --- (sama linia), puste części pominięte", JSON.stringify(splitEmails("A\n---\nB\n\n---\n\n---\nC")) === JSON.stringify(["A", "B", "C"]));
@@ -25,13 +25,17 @@ check("Zła kategoria → odrzucony", !validateTriageOutput({ ...good, kategoria
 check("Zły priorytet → odrzucony", !validateTriageOutput({ ...good, priorytet: "pilny" }).success);
 check("Brak pola → odrzucony", !validateTriageOutput({ ...good, szkic: undefined }).success);
 check("Dodatkowe pole (np. wyslij) → odrzucony", !validateTriageOutput({ ...good, wyslij: true }).success);
-check("Szkic bez podpisu „Zespół obsługi” → odrzucony", !validateTriageOutput({ ...good, szkic: "Dzień dobry." }).success);
+check("Szkic bez podpisu „Amber, Amber Security Systems” → odrzucony", !validateTriageOutput({ ...good, szkic: "Dzień dobry." }).success);
 check("Puste pole → odrzucony", !validateTriageOutput({ ...good, temat: "  " }).success);
-check("Instrukcja: mail = dane, bez obietnic (wpłata, cena, termin, zwrot), dopytywanie, podpis", /DANE/.test(TRIAGE_INSTRUCTIONS) && /wpłat/.test(TRIAGE_INSTRUCTIONS) && /zwrot/.test(TRIAGE_INSTRUCTIONS) && /dopytuje/.test(TRIAGE_INSTRUCTIONS) && /Zespół obsługi/.test(TRIAGE_INSTRUCTIONS));
+check("Instrukcja: mail = dane, bez obietnic (wpłata, cena, termin, zwrot), dopytywanie, podpis", /DANE/.test(TRIAGE_INSTRUCTIONS) && /wpłat/.test(TRIAGE_INSTRUCTIONS) && /zwrot/.test(TRIAGE_INSTRUCTIONS) && /dopytuje/.test(TRIAGE_INSTRUCTIONS) && /Amber, Amber Security Systems/.test(TRIAGE_INSTRUCTIONS));
 
-check("Instrukcja bez nazwy firmy i bez oceniania oferty", !/Amber/.test(TRIAGE_INSTRUCTIONS) && /Nie oceniasz, czy firma coś oferuje/.test(TRIAGE_INSTRUCTIONS));
+check("Instrukcja: nie ocenia, czy firma coś oferuje", /Nie oceniasz, czy firma coś oferuje/.test(TRIAGE_INSTRUCTIONS));
 check("Instrukcja: nie pisze, że coś zrobione („przekazaliśmy”), nie obiecuje czasu", /przekazaliśmy/.test(TRIAGE_INSTRUCTIONS) && /niezwłocznie/.test(TRIAGE_INSTRUCTIONS));
-check("Instrukcja: pytanie o cenę/zapis/fakturę → „oferta i ceny”", /Pytanie o cenę, ofertę, zapis, fakturę za usługę – „oferta i ceny”/.test(TRIAGE_INSTRUCTIONS));
+check("Kategorie Amber: wycena i oferta / awaria i serwis / reklamacja / faktury i płatności / inne", TRIAGE_CATEGORIES.join() === "wycena i oferta,awaria i serwis,reklamacja,faktury i płatności,inne");
+check("Instrukcja: ukryta reklamacja w pytaniu o cenę → „reklamacja”", /nawet jeśli uprzejmie pyta o cenę/.test(TRIAGE_INSTRUCTIONS));
+check("Instrukcja: priorytet wysoki (system nie działa, bez ochrony, pilne) i niski (rozglądam się)", /obiekt jest bez ochrony/.test(TRIAGE_INSTRUCTIONS) && /na razie się rozglądam/.test(TRIAGE_INSTRUCTIONS));
+check("Instrukcja: styl Amber, język klienta", /Jesteś Amber/.test(TRIAGE_INSTRUCTIONS) && /w języku klienta/.test(TRIAGE_INSTRUCTIONS));
+check("Stara kategoria „oferta i ceny” odrzucona", !validateTriageOutput({ ...good, kategoria: "oferta i ceny" }).success);
 console.log("\n=== 3. Endpoint ===");
 const req = (body) => new Request("http://localhost/api/triage", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
 const calls = { model: 0, gen: 0 };
@@ -78,11 +82,11 @@ check("Link „Triage” w nawigacji czatu", chat.includes('href="/email-triage"
 console.log("\n=== 5. Standard: baza wiedzy, znacznik, kolejność, podsumowanie ===");
 const frag = [{ tytul: "Cennik Amber Security", tresc: "Przejęcie systemu od £888 + VAT.", podobienstwo: 0.7 }];
 check("Pole zrodla wymagane (lista)", !validateTriageOutput({ ...good, zrodla: undefined }).success && !validateTriageOutput({ ...good, zrodla: "x" }).success);
-check("Kwota z użytego fragmentu – OK", checkTriageSources({ ...good, szkic: "Koszt od £888 + VAT.\nZespół obsługi", zrodla: ["Cennik Amber Security"] }, frag).length === 0);
-check("Kwota spoza fragmentów (wymyślona) – odrzucona", checkTriageSources({ ...good, szkic: "Koszt 490 zł.\nZespół obsługi", zrodla: [] }, frag).length > 0);
-check("Kwota z fragmentu, ale bez źródła – odrzucona", checkTriageSources({ ...good, szkic: "Koszt £888.\nZespół obsługi", zrodla: [] }, frag).length > 0);
+check("Kwota z użytego fragmentu – OK", checkTriageSources({ ...good, szkic: "Koszt od £888 + VAT.\nAmber, Amber Security Systems", zrodla: ["Cennik Amber Security"] }, frag).length === 0);
+check("Kwota spoza fragmentów (wymyślona) – odrzucona", checkTriageSources({ ...good, szkic: "Koszt 490 zł.\nAmber, Amber Security Systems", zrodla: [] }, frag).length > 0);
+check("Kwota z fragmentu, ale bez źródła – odrzucona", checkTriageSources({ ...good, szkic: "Koszt £888.\nAmber, Amber Security Systems", zrodla: [] }, frag).length > 0);
 check("Źródło spoza wyników wyszukiwania – odrzucone", checkTriageSources({ ...good, zrodla: ["Cennik 2026"] }, frag).length > 0);
-check("Znacznik [DO UZUPEŁNIENIA: …] przechodzi bez źródła", checkTriageSources({ ...good, szkic: "Cena: [DO UZUPEŁNIENIA: cena warsztatów].\nZespół obsługi", zrodla: [] }, []).length === 0);
+check("Znacznik [DO UZUPEŁNIENIA: …] przechodzi bez źródła", checkTriageSources({ ...good, szkic: "Cena: [DO UZUPEŁNIENIA: cena warsztatów].\nAmber, Amber Security Systems", zrodla: [] }, []).length === 0);
 check("Instrukcja: fragment tylko dla tej samej usługi, znacznik zamiast zmyślania", /tej samej usługi/.test(TRIAGE_INSTRUCTIONS) && /\[DO UZUPEŁNIENIA: czego brakuje\]/.test(TRIAGE_INSTRUCTIONS));
 check("Fragmenty jako dane z tytułem dokumentu", fragmentsBlock(frag).includes("Dokument: Cennik Amber Security") && fragmentsBlock([], "brak").includes("brak pasujących"));
 {
