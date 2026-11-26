@@ -466,6 +466,10 @@ export default function Chat({
         <Link href="/dashboard" className="logout">
           Dashboard podróży
         </Link>
+        {/* Lekcja 8, Warsztat 1: misja „Triage maili” */}
+        <Link href="/email-triage" className="logout">
+          Triage
+        </Link>
         <button type="button" className="logout" onClick={handleLogout}>
           Wyloguj
         </button>
