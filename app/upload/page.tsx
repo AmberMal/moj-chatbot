@@ -31,7 +31,7 @@ export default async function UploadPage() {
   }
 
   return (
-    <main className="chat profile-page">
+    <main className="chat profile-page upload-page">
       {/* 27.11: powrót do czatu po prawej (kolumna przycisków), jak w Historii i Profilu */}
       <div className="toolbar">
         <Link href="/" className="logout logout-text">

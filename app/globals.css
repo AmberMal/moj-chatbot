@@ -656,9 +656,10 @@ h1 { margin: 0; font-size: 26px; }
 .mission-saved { margin: 0 0 8px; color: var(--muted); font-size: 0.9em; }
 
 /* 27.11 (po lekcji 8): na szerokim oknie przyciski czatu w kolumnie po prawej stronie, jeden pod drugim.
-   Rozmowa zostaje na środku (760 px); kolumna nie zasłania jej, bo pojawia się dopiero od 1240 px.
+   Od 1000 px: strona z kolumną robi jej miejsce po prawej (padding body), więc kolumna nie zasłania treści.
    Na węższym oknie i telefonie – dotychczasowy poziomy pasek. */
-@media (min-width: 1240px) {
+@media (min-width: 1000px) {
+  body:has(.toolbar) { padding-right: 232px; }
   .toolbar {
     position: fixed;
     top: 24px;
@@ -738,3 +739,233 @@ h1 { margin: 0; font-size: 26px; }
 .mission-icon { font-size: 26px; line-height: 1; }
 .mission-choice strong { font-size: 16px; }
 .mission-desc { margin: 0 0 8px; color: var(--muted); }
+/* 27.11 – Profil klienta, wygląd A + E: wizytówka, edycja i podgląd „Tak Amber Cię widzi” */
+.profile-layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; }
+/* Dwie kolumny od 900 px (od 1000 px strona robi miejsce na kolumnę przycisków po prawej). */
+@media (min-width: 900px) { .profile-layout { grid-template-columns: minmax(0, 1fr) 260px; align-items: stretch; } }
+@media (min-width: 1300px) { .profile-page { max-width: 1000px; } }
+.profile-hero { background: var(--accent-soft); border-color: var(--accent-line); }
+.profile-hero-top { display: flex; align-items: center; gap: 12px; }
+.profile-avatar { width: 48px; height: 48px; border-radius: 50%; background: var(--accent); color: #000; font-weight: 700; font-size: 20px; display: inline-flex; align-items: center; justify-content: center; flex: none; }
+.profile-hero-name { margin: 0; font-size: 20px; font-weight: 700; }
+.profile-preview { background: var(--accent-soft); border: 1px solid var(--accent-line); border-radius: 14px; padding: 14px 16px; display: flex; flex-direction: column; gap: 8px; }
+.profile-preview h2 { margin: 0; font-size: 16px; }
+.profile-greeting { margin: 0; line-height: 1.5; }
+.profile-known { margin: 0; padding-left: 18px; font-size: 14px; }
+.profile-known span { color: var(--muted); }
+/* 27.11 – Profil, wariant 1: „Najważniejsze dla Amber” jako karty z ołówkiem */
+.pref-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; }
+.pref-card { position: relative; display: flex; flex-direction: column; align-items: flex-start; gap: 4px; text-align: left; padding: 12px 14px; border: 1px solid transparent; border-radius: 12px; background: #f6f3ea; font: inherit; color: var(--ink); cursor: pointer; }
+.pref-card:hover:not(:disabled) { border-color: var(--accent-hover); background: var(--accent-soft); }
+.pref-empty { background: none; border: 1.5px dashed var(--border); }
+.pref-cap { font-size: 12px; letter-spacing: 0.03em; color: var(--muted); font-weight: 600; }
+.pref-value { font-size: 17px; font-weight: 700; padding-right: 18px; overflow-wrap: anywhere; }
+.pref-empty .pref-value { font-size: 15px; font-weight: 600; color: #8a6100; }
+.pref-pencil { position: absolute; top: 10px; right: 12px; color: var(--muted); font-size: 15px; }
+.pref-editing { cursor: default; grid-column: 1 / -1; border-color: var(--accent); background: var(--surface); }
+.pref-editing input, .pref-editing select { width: 100%; box-sizing: border-box; padding: 8px 10px; border: 1px solid var(--border); border-radius: 10px; font: inherit; background: #fff; }
+.pref-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+.pref-save { background: var(--accent); border-color: var(--accent); color: #000; font-weight: 600; }
+/* 27.11 – Profil, wariant 2: znaczniki do kliknięcia */
+.pref-chips { display: flex; flex-direction: column; gap: 14px; }
+.pref-group { display: flex; flex-direction: column; gap: 6px; }
+.chip-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip { padding: 7px 14px; border: 1px solid var(--border); border-radius: 20px; background: var(--surface); font: inherit; font-size: 14px; color: var(--ink); cursor: pointer; }
+.chip:hover:not(:disabled) { border-color: var(--accent-hover); background: var(--accent-soft); }
+.chip-on, .chip-on:hover:not(:disabled) { background: var(--accent); border-color: var(--accent); color: #000; font-weight: 700; }
+.chip-add { border-style: dashed; color: #8a6100; font-weight: 600; }
+.pref-hint { font-size: 12px; color: var(--muted); }
+.chip-other { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.chip-other input { flex: 1 1 200px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 10px; font: inherit; background: #fff; }
+/* 27.11 – Profil, wariant 3: pola z etykietą w środku i jeden „Zapisz zmiany” */
+.float-fields { display: flex; flex-direction: column; gap: 10px; }
+.float-field { display: flex; flex-direction: column; gap: 2px; padding: 8px 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); cursor: text; }
+.float-field:focus-within { border-color: var(--accent-hover); box-shadow: 0 0 0 3px var(--accent-soft); }
+.float-field input, .float-field select { border: none; outline: none; padding: 2px 0; font: inherit; font-size: 16px; background: transparent; width: 100%; }
+.float-save { align-self: flex-start; border-radius: 10px; min-height: 40px; }
+/* 27.11 – Profil, warianty 1 + 2: karta z ołówkiem otwiera znaczniki */
+.pref-editing.pref-group { gap: 8px; }
+.pref-close { align-self: flex-end; background: none; border: none; padding: 0; font: inherit; font-size: 13px; color: var(--muted); cursor: pointer; text-decoration: underline; }
+/* 27.11: komunikat w Profilu nad obiema kolumnami; podgląd równo z lewą kolumną (góra i dół) */
+.profile-message { grid-column: 1 / -1; margin: 0; }
+.profile-preview { align-self: stretch; }
+.profile-clear-row { grid-column: 1; }
+.pref-open { grid-column: 1 / -1; cursor: default; background: #f6f3ea; }
+.pref-open:hover { border-color: transparent; background: #f6f3ea; }
+/* 27.11: wyraźniejsze nazwy pozycji w „Najważniejsze dla Amber” (większe, czarne, pogrubione) */
+.pref-open .pref-cap { font-size: 16px; font-weight: 700; color: var(--ink); letter-spacing: 0; }
+/* 27.11: znaczniki trochę węższe, żeby „+ inne” mieściło się w jednym rzędzie obok „sklep” */
+.pref-open .chip-row { width: 100%; gap: 6px; }
+.pref-open .chip { padding: 6px 11px; }
+/* 27.11 – Triage, wariant 1: duże pole „Wklej maile tutaj” */
+.triage-drop { position: relative; }
+.triage-drop textarea { min-height: 220px; border: 2px dashed #ef9f27; background: var(--accent-soft); border-radius: 16px; padding: 16px; }
+.triage-drop.has-text textarea { border-style: solid; border-color: var(--accent-line); background: #fff; }
+.triage-drop textarea:focus-visible { outline: none; border-color: var(--accent-hover); box-shadow: 0 0 0 3px var(--accent-soft); }
+.triage-drop-hint { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; pointer-events: none; color: #633806; text-align: center; }
+.triage-drop-hint strong { font-size: 17px; }
+.triage-drop-hint span:last-child { font-size: 13px; color: #854f0b; }
+.triage-drop-icon { font-size: 30px; line-height: 1; }
+.triage-sort { border-radius: 10px; min-height: 42px; padding: 8px 18px; font-weight: 700; }
+/* 27.11 – Misje: listy do wyboru i znaczniki kryteriów */
+.mission-field select { padding: 10px 12px; border: 1px solid #d9d4c7; border-radius: 10px; font: inherit; background: #fff; }
+.mission-field[role="group"] { gap: 8px; }
+.mission-field[role="group"] > span { font-weight: 600; }
+/* 27.11: listy wyboru w Misjach – krótsze (do ok. 340 px) i wyższe (46 px), wyraźna czcionka */
+.mission-field select { width: 100%; max-width: 340px; box-sizing: border-box; height: 46px; padding: 0 38px 0 14px; font-size: 16px; color: var(--ink);
+  border: 1px solid #d9d4c7; border-radius: 12px; -webkit-appearance: none; appearance: none;
+  background: #fff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%23555' stroke-width='1.6' fill='none'/%3E%3C/svg%3E") no-repeat right 14px center; }
+.mission-field select:focus-visible { outline: none; border-color: var(--accent-hover); box-shadow: 0 0 0 3px var(--accent-soft); }
+.mission-field select + input { max-width: 340px; }
+/* 27.11 – Misje: numery kroków, liczniki przy nagłówku, przycisk z informacją, większe ikony kafelków */
+.step-title { display: inline-flex; align-items: center; gap: 8px; font-weight: 700; font-size: 16px; }
+.step-num { width: 24px; height: 24px; border-radius: 50%; background: var(--accent); color: #000; font-size: 13px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; flex: none; }
+.step-count { font-size: 13px; font-weight: 600; color: #8a6100; background: var(--accent-soft); border-radius: 8px; padding: 1px 8px; }
+.mission-hint { align-self: flex-start !important; color: var(--muted); }
+.mission-field[role="group"] small.mission-hint { align-self: flex-start; }
+.mission-run-btn { min-height: 44px; padding: 8px 20px; border-radius: 10px; font-weight: 700; }
+.mission-icon { width: 46px; height: 46px; border-radius: 50%; background: var(--accent-soft); display: inline-flex; align-items: center; justify-content: center; font-size: 24px; font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif; }
+.mission-choice.active .mission-icon { background: #fff; }
+/* 27.11 – Misje w stylu Profilu: jedna biała karta formularza, w niej beżowe podkarty kroków (pogrubiona nazwa, znaczniki, podpowiedź pod spodem) */
+.missions-page h1 { text-align: left; }
+.missions-page .mission-list, .missions-page .mission-contract, .missions-page .triage-form, .missions-page .mission-runs, .missions-page .mission-report { max-width: 720px; width: 100%; box-sizing: border-box; }
+.missions-page .mission-contract { background: #fff; border: 1px solid var(--border); border-radius: 14px 14px 0 0; border-bottom: none; padding: 18px 18px 4px; margin-bottom: -16px; }
+.missions-page .mission-contract h2 { margin: 0 0 6px; font-size: 18px; }
+.missions-page .mission-contract .mission-desc { font-size: 14px; }
+.missions-page .triage-form { background: #fff; border: 1px solid var(--border); border-top: none; border-radius: 0 0 14px 14px; padding: 8px 18px 18px; gap: 12px; }
+.missions-page .mission-field { background: #f6f3ea; border: none; border-radius: 12px; padding: 14px 16px; gap: 8px; text-align: left; }
+.missions-page .mission-field .chip-row { justify-content: flex-start; }
+.missions-page .mission-field .chip { background: #fff; }
+.missions-page .mission-field .chip-on { background: var(--accent); }
+.missions-page .mission-hint, .missions-page .mission-field small { align-self: flex-start !important; text-align: left; font-size: 12px; }
+.missions-page .step-title { font-size: 16px; }
+.missions-page .mission-field textarea, .missions-page .mission-field input[type="text"] { background: #fff; }
+.missions-page .mission-run-btn { align-self: flex-start; margin-top: 4px; }
+.missions-page .mission-runs { margin-top: 16px; }
+
+/* 27.11 – jeden styl wszędzie (jak Profil i Misje): biała karta strony, w niej beżowe podkarty z pogrubioną nazwą */
+:root { --sub-card: #f6f3ea; }
+
+/* Historia: lista rozmów w białej karcie, każda rozmowa = beżowa podkarta */
+.history-list { background: #fff; border: 1px solid var(--border); border-radius: 14px; padding: 14px; gap: 10px; }
+.history-item { background: var(--sub-card); border: 1px solid transparent; border-radius: 12px; box-shadow: none; padding: 12px 14px; }
+.history-item:hover { background: var(--accent-soft); border-color: var(--accent-hover); }
+.history-title { font-weight: 700; font-size: 16px; }
+.history-empty { background: #fff; border: 1px solid var(--border); border-radius: 14px; padding: 18px; }
+
+/* Baza wiedzy: karty białe, dokumenty jako beżowe podkarty zamiast wierszy tabeli */
+.upload-page .profile-card { border-radius: 14px; box-shadow: none; }
+.upload-page .upload-table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); }
+.upload-page .upload-table, .upload-page .upload-table tbody { display: block; width: 100%; }
+.upload-page .upload-table tbody { display: flex; flex-direction: column; gap: 10px; }
+.upload-page .upload-table tr { display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto; grid-template-areas: "tytul tytul tytul usun" "frag data . usun"; align-items: center; gap: 2px 0; background: var(--sub-card); border-radius: 12px; padding: 12px 14px; }
+.upload-page .upload-table td { border: none; padding: 0; width: auto !important; text-align: left !important; }
+.upload-page .upload-table td:nth-child(1) { grid-area: tytul; font-weight: 700; font-size: 16px; }
+.upload-page .upload-table td:nth-child(2) { grid-area: frag; font-size: 13px; color: var(--muted); }
+.upload-page .upload-table td:nth-child(2)::after { content: " fragmentów ·\00a0"; }
+.upload-page .upload-table td:nth-child(3) { grid-area: data; font-size: 13px; color: var(--muted); }
+.upload-page .upload-table td:nth-child(3)::before { content: "dodano "; }
+.upload-page .upload-table td:last-child { grid-area: usun; padding-left: 12px; }
+.upload-page .upload-form input, .upload-page .upload-form textarea { background: #fff; }
+
+/* Triage: pole i przycisk w białej karcie, każdy mail = beżowa podkarta z paskiem priorytetu */
+.triage-page:not(.missions-page) .triage-form { background: #fff; border: 1px solid var(--border); border-radius: 14px; padding: 16px; }
+.triage-card { background: var(--sub-card); border-top: none; border-right: none; border-bottom: none; }
+.triage-cards { background: #fff; border: 1px solid var(--border); border-radius: 14px; padding: 14px; }
+.triage-card .triage-draft { background: #fff; }
+.triage-from { font-size: 16px; }
+
+/* Dashboard podróży: formularz w białej karcie, wyniki jako beżowe podkarty */
+.dashboard-page .trip-form { background: #fff; border: 1px solid var(--border); border-radius: 14px; padding: 16px; }
+.dashboard-page .trip-form input { background: #fff; }
+.dashboard-page .trip-result { background: #fff; border: 1px solid var(--border); border-radius: 14px; padding: 16px; }
+.dashboard-page .card { background: var(--sub-card); border: none; box-shadow: none; border-radius: 12px; }
+/* 27.11: większe logo AMBER na szerokim oknie (z kolumną przycisków po prawej) */
+@media (min-width: 1000px) {
+  .brand-logo { font-size: 58px; padding: 18px 32px 2px 34px; }
+  .brand-tagline { font-size: 17px; }
+}
+/* 27.11 – czat, dopracowanie */
+/* 1. Pusta rozmowa niższa – rośnie razem z wiadomościami */
+@media (min-width: 1000px) { .chat > .messages { flex: 0 1 auto; min-height: 300px; } }
+/* 2. W kolumnie po prawej samo imię i kółko (bez długiego e-maila) */
+@media (min-width: 1000px) { .toolbar .user-info .user-email { font-size: 12px; } .toolbar .user-name { font-size: 16px; } }
+/* 3. Przyciski pod polem wiadomości jednakowe; „Wyślij” jedyny żółty; nieaktywne mniej blade */
+.composer button { border-radius: 10px; font-weight: 600; }
+.composer button:disabled { opacity: 0.6; }
+.composer button.secondary { font-weight: 600; }
+/* 4. „Pomysły na obraz” jak znaczniki w Misjach i Profilu */
+.suggestions { background: #fff; border: 1px solid var(--border); border-radius: 14px; padding: 12px 14px; gap: 8px; }
+.suggestions > span { font-size: 14px; font-weight: 700; color: var(--ink); }
+.suggestions button { padding: 7px 14px; border-radius: 20px; font-size: 14px; background: var(--sub-card, #f6f3ea); border-color: transparent; text-align: left; }
+.suggestions button:hover:not(:disabled) { background: var(--accent-soft); border-color: var(--accent-hover); }
+/* 27.11 – prawe menu, wariant B: lista z ikonami bez tła; po najechaniu jasnożółte tło i żółta kreska z lewej */
+.nav-icon { display: none; }
+@media (min-width: 1000px) {
+  .toolbar .nav-icon { display: inline-block; width: 22px; text-align: center; margin-right: 8px; filter: grayscale(1); opacity: 0.75; }
+  .toolbar .logout:not(.logout-text):not(.logout-new) { background: transparent; border: none; border-left: 4px solid transparent; border-radius: 0; color: var(--ink); font-weight: 500; min-height: 40px; padding: 8px 10px; }
+  .toolbar .logout:not(.logout-text):not(.logout-new):hover:not(:disabled) { background: var(--accent-soft); border-left-color: var(--accent); }
+  .toolbar .logout-exit { color: var(--muted) !important; margin-top: 18px; }
+  .toolbar .logout-exit:hover:not(:disabled) { color: var(--ink) !important; }
+  .toolbar { gap: 2px; }
+}
+/* 27.11: na stronie czatu druga kolumna: profil (imię i e-mail) u góry, równo z logo; menu zaczyna się równo z oknem wiadomości.
+   Kolumna 250 px, żeby e-mail mieścił się bez ucinania. Pozostałe strony bez zmian. */
+.toolbar-nav { display: contents; }
+@media (min-width: 1000px) {
+  body:has(main.chat > .messages) { padding-right: 0; }
+  main.chat:has(> .messages) { display: grid; grid-template-columns: minmax(0, 760px) 250px; column-gap: 32px; row-gap: 16px; max-width: 1042px; align-content: start; }
+  main.chat:has(> .messages) > * { grid-column: 1; }
+  main.chat:has(> .messages) > .toolbar { display: contents; }
+  main.chat:has(> .messages) > .toolbar > .user-info { grid-column: 2; grid-row: 1; align-self: start; margin: 8px 0 0; }
+  main.chat:has(> .messages) .toolbar-nav { display: flex; flex-direction: column; gap: 2px; grid-column: 2; grid-row: 2 / span 30; align-self: start; position: sticky; top: 24px; }
+  .toolbar .user-email { overflow-wrap: normal; white-space: nowrap; }
+}
+/* 27.11 – prawe menu (wybór Malwiny): układ listy jak w B, bez ikonek; delikatne podświetlenie po najechaniu
+   (jasnożółte tło i żółta kreska z lewej). */
+@media (min-width: 1000px) { .toolbar .nav-icon { display: none; } }
+/* 27.11 – prawe menu (poprawka Malwiny): każda pozycja zawsze delikatnie podświetlona jak w B
+   (jasnożółte tło + żółta kreska z lewej), po najechaniu ciemniejszy żółty. Bez ikonek. */
+@media (min-width: 1000px) {
+  .toolbar .logout:not(.logout-text):not(.logout-new):not(.logout-exit) { background: var(--accent-soft); border: none !important; border-radius: 8px; margin-bottom: 4px; }
+  .toolbar .logout:not(.logout-text):not(.logout-new):not(.logout-exit):hover:not(:disabled) { background: var(--accent); }
+}
+@media (min-width: 1000px) { .toolbar .logout-exit { border: none !important; padding-left: 10px; } }
+/* 27.11: „Wyloguj” przy profilu – na szerokim oknie pod e-mailem, jako delikatny link; na wąskim na końcu paska */
+.toolbar > .logout-exit { order: 99; }
+@media (min-width: 1000px) {
+  main.chat:has(> .messages) > .toolbar > .logout-exit { grid-column: 2; grid-row: 1; align-self: start; justify-self: start; margin: 58px 0 0 42px !important; min-height: 0; padding: 2px 8px !important; font-size: 13px; border-radius: 6px; }
+}
+/* 27.11: „Wyloguj” wyraźnie oddzielony od profilu – mały przycisk z ramką i ikonką wyłącznika; po najechaniu czerwonawy */
+.exit-icon { margin-right: 6px; }
+@media (min-width: 1000px) {
+  main.chat:has(> .messages) > .toolbar > .logout-exit { border: 1px solid var(--border) !important; background: transparent !important; color: var(--ink) !important; padding: 4px 12px !important; border-radius: 8px; margin-top: 62px !important; font-weight: 600; }
+  main.chat:has(> .messages) > .toolbar > .logout-exit:hover:not(:disabled) { border-color: #e0a0a0 !important; background: var(--danger-soft) !important; color: #8a1f1f !important; }
+}
+/* 27.11: podstrony (Profil, Historia, Baza wiedzy, Misje, Triage, Dashboard) jak czat – „Wróć do czatu” w kolumnie
+   tuż obok treści, a nie przy samej krawędzi ekranu; całość wyśrodkowana, bez pustego pasa między treścią a linkiem. */
+@media (min-width: 1000px) {
+  body:has(main.chat > .toolbar) { padding-right: 0; }
+  main.chat:has(> .toolbar):not(:has(> .messages)) { display: grid; grid-template-columns: minmax(0, 1fr) 180px; column-gap: 32px; row-gap: 16px; max-width: 972px; align-content: start; }
+  main.chat.profile-page:has(> .toolbar):not(.upload-page) { max-width: 1212px; }
+  main.chat:has(> .toolbar):not(:has(> .messages)) > * { grid-column: 1; }
+  main.chat:has(> .toolbar):not(:has(> .messages)) > .toolbar { grid-column: 2; grid-row: 1 / span 40; position: sticky; top: 24px; right: auto; width: auto; max-height: none; align-self: start; }
+}
+/* 27.11: więcej oddechu między treścią a kolumną po prawej (32 → 56 px) */
+@media (min-width: 1000px) {
+  main.chat:has(> .messages) { column-gap: 56px; max-width: 1066px; }
+  main.chat:has(> .toolbar):not(:has(> .messages)) { column-gap: 56px; max-width: 996px; }
+  main.chat.profile-page:has(> .toolbar):not(.upload-page) { max-width: 1236px; }
+}
+/* 27.11: jeszcze odrobina oddechu (56 → 72 px) */
+@media (min-width: 1000px) {
+  main.chat:has(> .messages) { column-gap: 72px; max-width: 1082px; }
+  main.chat:has(> .toolbar):not(:has(> .messages)) { column-gap: 72px; max-width: 1012px; }
+  main.chat.profile-page:has(> .toolbar):not(.upload-page) { max-width: 1252px; }
+}
+/* 27.11 (wybór Malwiny): prawa kolumna wyśrodkowana – profil, Wyloguj i napisy w menu na środku kolumny */
+@media (min-width: 1000px) {
+  main.chat:has(> .messages) > .toolbar > .user-info { justify-self: center; margin: 8px 0 0; }
+  main.chat:has(> .messages) > .toolbar > .logout-exit { justify-self: center; margin: 60px 0 0 !important; }
+  main.chat:has(> .messages) .toolbar-nav .logout { justify-content: center; text-align: center; }
+}

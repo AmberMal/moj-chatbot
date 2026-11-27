@@ -462,7 +462,7 @@ console.log("\n=== 11. Dla szybkich: preferencje ważne dla Amber Security ===")
   const editor = read("app/profile/profile-editor.tsx");
   const instr = read("lib/amber-instructions.ts");
   check("/profile: sekcja „Najważniejsze dla Amber” z trzema pozycjami (zawsze widoczne)", editor.includes("Najważniejsze dla Amber") && editor.includes("KEY_PREFERENCES.map("));
-  check("/profile: preferowany kontakt z listy (select)", editor.includes("<select") && editor.includes("item.options.map("));
+  check("/profile: preferowany kontakt z listy (select albo znaczniki z item.options – od 27.11 znaczniki)", (editor.includes("<select") && editor.includes("item.options.map(")) || (editor.includes("item.options") && editor.includes("options.map((option)") && editor.includes("aria-pressed")) || (editor.includes("<select") && editor.includes("item.options.map(")));
   check("/profile: puste pozycje opisane („brak – Amber zapyta…”)", editor.includes("KEY_PREFERENCE_EMPTY") && KEY_PREFERENCE_EMPTY.startsWith("brak – Amber zapyta"));
   check("/profile: inne preferencje osobno (bez dublowania kluczowych)", editor.includes("Inne preferencje") && editor.includes("!KEY_NAMES.includes(key)"));
   check("Główne instrukcje Amber bez zmian (zasada „Państwo”)", instr.includes("Zwracaj się do klienta w formie „Państwo”") && !instr.includes("rodzaj_obiektu"));

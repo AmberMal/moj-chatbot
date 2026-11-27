@@ -2,7 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getCurrentUser } from "../../lib/auth";
 import { loginUrl } from "../../lib/amber-auth-redirect";
-import type { Profile } from "../../lib/amber-profile";
+import { greetingText, type Profile } from "../../lib/amber-profile";
 import { getUserProfileStore } from "../../lib/supabase";
 import ProfileEditor from "./profile-editor";
 
@@ -44,7 +44,7 @@ export default async function ProfilePage() {
           {problem}
         </p>
       )}
-      {profile && <ProfileEditor initial={profile} />}
+      {profile && <ProfileEditor initial={profile} initialGreeting={greetingText(profile)} />}
     </main>
   );
 }

@@ -21,11 +21,7 @@ export default async function EmailTriagePage() {
         </Link>
       </div>
       <h1>Triage maili</h1>
-      <p className="hint">
-        Wklej maile oddzielone linią z samymi trzema myślnikami (---). Najwyżej {MAX_TRIAGE_EMAILS} maili naraz. Agent
-        posortuje je i przygotuje szkice odpowiedzi – niczego nie wysyła.
-      </p>
-      <TriageForm />
+      <TriageForm maxEmails={MAX_TRIAGE_EMAILS} />
     </main>
   );
 }

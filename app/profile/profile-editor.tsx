@@ -12,10 +12,17 @@ import {
 
 const KEY_NAMES: readonly string[] = KEY_PREFERENCES.map((item) => item.key);
 
+// 27.11 (wygląd, wariant 2): gotowe znaczniki do kliknięcia (podpowiedzi w przeglądarce, nie fakty o firmie).
+const CHIPS: Record<string, readonly string[]> = {
+  rodzaj_obiektu: ["dom", "mieszkanie", "biuro", "sklep"],
+  system_alarmowy: ["Ajax", "Texecom", "Pyronix", "brak"],
+};
+
 // Lekcja 5, Warsztat 3 (Standard): edycja profilu na /profile.
 // Wszystkie zmiany idą przez /api/profile (serwer sprawdza sesję i te same zasady co narzędzie zapiszProfil:
 // bez haseł, kluczy, numerów kart i kont, dokumentów, danych o zdrowiu).
-export default function ProfileEditor({ initial }: { initial: ProfileView }) {
+// 27.11 (wygląd A + E): wizytówka na górze, pod nią edycja, a obok podgląd „Tak Amber Cię widzi” (powitanie z serwera).
+export default function ProfileEditor({ initial, initialGreeting }: { initial: ProfileView; initialGreeting: string }) {
   const [profile, setProfile] = useState<ProfileView>(initial);
   const [name, setName] = useState(initial.name ?? "");
   const [values, setValues] = useState<Record<string, string>>(initial.preferences);
@@ -23,6 +30,10 @@ export default function ProfileEditor({ initial }: { initial: ProfileView }) {
   const [newValue, setNewValue] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<{ kind: "ok" | "error"; text: string } | null>(null);
+  const [greeting, setGreeting] = useState(initialGreeting);
+  // 27.11 (wygląd): znaczniki zawsze widoczne w kartach; editing = przy której pozycji otwarte jest pole „+ inne”.
+  const [editing, setEditing] = useState<string | null>(null);
+  const [otherOpen, setOtherOpen] = useState(false);
 
   async function send(method: "PATCH" | "DELETE", body: unknown, success: string): Promise<boolean> {
     setBusy(true);
@@ -44,6 +55,7 @@ export default function ProfileEditor({ initial }: { initial: ProfileView }) {
         setProfile(parsed.profile);
         setName(parsed.profile.name ?? "");
         setValues(parsed.profile.preferences);
+        setGreeting(parsed.greeting);
       }
       setMessage({ kind: "ok", text: success });
       return true;
@@ -59,8 +71,23 @@ export default function ProfileEditor({ initial }: { initial: ProfileView }) {
     event.preventDefault();
     if (name.trim()) void send("PATCH", { imie: name }, "Zapisano imię.");
   }
-  function savePreference(key: string) {
-    void send("PATCH", { preferencje: { [key]: values[key] ?? "" } }, `Zapisano: ${preferenceLabel(key)}.`);
+  // Klik w znacznik: zapis od razu; klik w już wybrany – usunięcie pozycji.
+  async function pickChip(key: string, label: string, value: string) {
+    if (profile.preferences[key] === value) {
+      await send("DELETE", { pozycja: key }, `Usunięto: ${label}.`);
+      return;
+    }
+    setValues((all) => ({ ...all, [key]: value }));
+    if (await send("PATCH", { preferencje: { [key]: value } }, `Zapisano: ${label}.`)) {
+      setEditing(null);
+      setOtherOpen(false);
+    }
+  }
+  async function savePreference(key: string) {
+    if (await send("PATCH", { preferencje: { [key]: values[key] ?? "" } }, `Zapisano: ${preferenceLabel(key)}.`)) {
+      setEditing(null);
+      setOtherOpen(false);
+    }
   }
   async function addPreference(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -77,16 +104,30 @@ export default function ProfileEditor({ initial }: { initial: ProfileView }) {
   }
 
   const keys = Object.keys(profile.preferences).filter((key) => !KEY_NAMES.includes(key));
+  const known = Object.entries(profile.preferences).filter(([, value]) => value.trim());
+  const initialLetter = (profile.name ?? "").trim().charAt(0).toUpperCase() || "?";
   return (
-    <div className="profile-editor">
+    <div className="profile-layout">
+      {/* Komunikat nad obiema kolumnami – wizytówka i podgląd zaczynają się na tej samej wysokości */}
       {message && (
-        <p className={message.kind === "ok" ? "profile-ok" : "error"} role={message.kind === "ok" ? "status" : "alert"}>
+        <p className={`profile-message ${message.kind === "ok" ? "profile-ok" : "error"}`} role={message.kind === "ok" ? "status" : "alert"}>
           {message.text}
         </p>
       )}
+    <div className="profile-editor">
 
-      <section className="profile-card">
-        <h2>Imię</h2>
+      {/* Wizytówka klienta (wariant A) */}
+      <section className="profile-card profile-hero">
+        <div className="profile-hero-top">
+          <span className="profile-avatar" aria-hidden="true">
+            {initialLetter}
+          </span>
+          <div>
+            <p className="profile-hero-name">{profile.name ?? "Bez imienia"}</p>
+            <p className="profile-note">tak zwraca się do Ciebie Amber</p>
+          </div>
+        </div>
+        <h2 className="sr-only">Imię</h2>
         <form className="profile-row" onSubmit={saveName}>
           <input type="text" aria-label="Imię" value={name} maxLength={60} placeholder="Brak imienia w profilu" onChange={(e) => setName(e.target.value)} />
           <button type="submit" className="logout" disabled={busy || !name.trim() || name.trim() === profile.name}>
@@ -102,46 +143,76 @@ export default function ProfileEditor({ initial }: { initial: ProfileView }) {
       <section className="profile-card">
         <h2>Najważniejsze dla Amber</h2>
         <p className="profile-note">Amber dopyta o brakujące pozycje, gdy rozmowa będzie ich dotyczyć, i będzie z nich korzystać w odpowiedziach.</p>
+        <div className="pref-cards">
         {KEY_PREFERENCES.map((item) => {
           const saved = profile.preferences[item.key];
           const current = values[item.key] ?? "";
+          const options: readonly string[] = "options" in item ? item.options : CHIPS[item.key] ?? [];
+          const custom = saved && !options.includes(saved) ? saved : null;
           return (
-            <div key={item.key} className="profile-row">
-              <label className="profile-label" htmlFor={`pref-${item.key}`}>
-                {item.label}
-              </label>
-              {"options" in item ? (
-                <select
-                  id={`pref-${item.key}`}
-                  value={current}
-                  onChange={(e) => setValues((all) => ({ ...all, [item.key]: e.target.value }))}
-                >
-                  <option value="">{KEY_PREFERENCE_EMPTY}</option>
-                  {item.options.map((option) => (
-                    <option key={option} value={option}>
-                      {option}
-                    </option>
-                  ))}
-                </select>
-              ) : (
-                <input
-                  id={`pref-${item.key}`}
-                  type="text"
-                  value={current}
-                  maxLength={200}
-                  placeholder={`${KEY_PREFERENCE_EMPTY} (${item.hint})`}
-                  onChange={(e) => setValues((all) => ({ ...all, [item.key]: e.target.value }))}
-                />
+            <div key={item.key} className="pref-group pref-card pref-open" role="group" aria-label={item.label}>
+              <span className="pref-cap">{item.label}</span>
+              <div className="chip-row">
+                {options.map((option) => (
+                  <button
+                    key={option}
+                    type="button"
+                    className={`chip${saved === option ? " chip-on" : ""}`}
+                    aria-pressed={saved === option}
+                    disabled={busy}
+                    onClick={() => void pickChip(item.key, item.label, option)}
+                  >
+                    {option}
+                  </button>
+                ))}
+                {custom && (
+                  <button type="button" className="chip chip-on" aria-pressed="true" disabled={busy} onClick={() => void pickChip(item.key, item.label, custom)}>
+                    {custom}
+                  </button>
+                )}
+                {!("options" in item) && !(otherOpen && editing === item.key) && (
+                  <button type="button" className="chip chip-add" disabled={busy} onClick={() => {
+                      setEditing(item.key);
+                      setOtherOpen(true);
+                    }}>
+                    + inne
+                  </button>
+                )}
+              </div>
+              <span className="pref-hint">{saved ? "Kliknij wybrany znacznik, żeby usunąć." : KEY_PREFERENCE_EMPTY}</span>
+              {otherOpen && editing === item.key && !("options" in item) && (
+                <div className="chip-other">
+                  <input
+                    id={`pref-${item.key}`}
+                    type="text"
+                    aria-label={`${item.label} – inne`}
+                    value={custom ? current : options.includes(current) ? "" : current}
+                    maxLength={200}
+                    autoFocus
+                    placeholder={item.hint}
+                    onChange={(e) => setValues((all) => ({ ...all, [item.key]: e.target.value }))}
+                  />
+                  <button type="button" className="logout pref-save" disabled={busy || !current.trim() || current === saved} onClick={() => void savePreference(item.key)}>
+                    Zapisz
+                  </button>
+                  <button
+                    type="button"
+                    className="logout"
+                    disabled={busy}
+                    onClick={() => {
+                      setValues((all) => ({ ...all, [item.key]: saved ?? "" }));
+                      setOtherOpen(false);
+                    }}
+                  >
+                    Anuluj
+                  </button>
+                </div>
               )}
-              <button type="button" className="logout" disabled={busy || !current.trim() || current === saved} onClick={() => savePreference(item.key)}>
-                Zapisz
-              </button>
-              <button type="button" className="history-delete" disabled={busy || !saved} onClick={() => void send("DELETE", { pozycja: item.key }, `Usunięto: ${item.label}.`)}>
-                Usuń
-              </button>
+
             </div>
           );
         })}
+        </div>
       </section>
 
       <section className="profile-card">
@@ -176,7 +247,28 @@ export default function ProfileEditor({ initial }: { initial: ProfileView }) {
         </form>
       </section>
 
-      <div className="profile-clear">
+
+    </div>
+
+      {/* Podgląd (wariant E): co Amber wie i jak przywita w nowej rozmowie */}
+      <aside className="profile-preview" aria-label="Tak Amber Cię widzi">
+        <h2>Tak Amber Cię widzi</h2>
+        <p className="profile-greeting">„{greeting}”</p>
+        <p className="profile-note">Amber pamięta:</p>
+        {known.length === 0 ? (
+          <p className="profile-note">jeszcze nic – uzupełnij profil albo powiedz to Amber w rozmowie.</p>
+        ) : (
+          <ul className="profile-known">
+            {known.map(([key, value]) => (
+              <li key={key}>
+                <span>{preferenceLabel(key)}:</span> {value}
+              </li>
+            ))}
+          </ul>
+        )}
+      </aside>
+      {/* „Wyczyść profil” pod kolumnami – podgląd kończy się na dole „Innych preferencji” */}
+      <div className="profile-clear profile-clear-row">
         <button type="button" className="history-delete" disabled={busy || (!profile.name && Object.keys(profile.preferences).length === 0)} onClick={clearAll}>
           Wyczyść profil
         </button>

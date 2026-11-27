@@ -149,7 +149,9 @@ export function conversationFromSearch(search: string): ConversationTarget {
   if (raw !== null && /^[1-9][0-9]{0,15}$/.test(raw) && Number.isSafeInteger(Number(raw))) {
     return { kind: "id", id: Number(raw) };
   }
-  return { kind: "latest" };
+  // 27.11 (decyzja Malwiny): wejście na czat bez numeru rozmowy = nowa rozmowa z powitaniem,
+  // a nie ostatnia rozmowa. Wcześniejsze rozmowy są w Historii (/?c=12).
+  return { kind: "new" };
 }
 export const HISTORY_LOADING_MESSAGE = "Wczytuję rozmowę…";
 export const HISTORY_NOT_FOUND = "Nie znaleziono tej rozmowy. Możesz pisać dalej – zacznie się nowa rozmowa.";

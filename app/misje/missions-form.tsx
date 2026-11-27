@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState, type FormEvent } from "react";
-import type { MissionReport, PublicMission } from "../../lib/amber-missions";
+import type { MissionField, MissionReport, PublicMission } from "../../lib/amber-missions";
 import { formatMissionDate, reportToText } from "../../lib/amber-mission-text";
 import type { MissionRunSummary } from "../../lib/amber-mission-runs";
 
@@ -24,6 +24,9 @@ export default function MissionsForm({ missions }: { missions: PublicMission[] }
   const [savedFrom, setSavedFrom] = useState<string | null>(null); // data otwartego zapisanego wyniku
   const [saveNote, setSaveNote] = useState("");
   const mission = missions.find((m) => m.id === missionId);
+  // 27.11: kroki formularza (grupa pól = jeden krok) i to, czego jeszcze brakuje do uruchomienia misji.
+  const steps = (mission?.pola ?? []).filter((f, i, all) => !f.group || all.findIndex((g) => g.group?.id === f.group?.id) === i);
+  const missing = mission ? missingText(mission.pola, values) : null;
   const saved = mission?.zapisuj === true;
 
   // Dla szybkich: lista 5 ostatnich wykonań (tylko własne – RLS).
@@ -173,36 +176,40 @@ export default function MissionsForm({ missions }: { missions: PublicMission[] }
 
       {mission && (
         <form className="triage-form" onSubmit={handleSubmit}>
-          {mission.pola.map((field) => (
-            <label key={field.name} className="mission-field">
-              {field.label}
-              {field.multiline ? (
-                <textarea
-                  rows={10}
-                  value={values[field.name] ?? ""}
-                  maxLength={field.maxLength}
-                  placeholder={field.placeholder}
+          {mission.pola.map((field, index) => {
+            const step = steps.length > 1 ? steps.indexOf(field) + 1 : 0;
+            // Pola z jedną grupą (np. Firma 1–3) – jeden zestaw znaczników przy pierwszym polu grupy.
+            if (field.group) {
+              const members = mission.pola.filter((f) => f.group?.id === field.group?.id);
+              if (members[0] !== field) return null;
+              return (
+                <GroupChips
+                  step={step}
+                  key={`${mission.id}-${field.group.id}-${index}`}
+                  label={field.group.label}
+                  fields={members}
+                  values={members.map((f) => values[f.name] ?? "")}
                   disabled={pending}
-                  onChange={(e) => setValues((v) => ({ ...v, [field.name]: e.target.value }))}
+                  onChange={(picked) =>
+                    setValues((v) => ({ ...v, ...Object.fromEntries(members.map((f, i) => [f.name, picked[i] ?? ""])) }))
+                  }
                 />
-              ) : (
-                <input
-                  type="text"
-                  value={values[field.name] ?? ""}
-                  maxLength={field.maxLength}
-                  placeholder={field.placeholder}
-                  disabled={pending}
-                  onChange={(e) => setValues((v) => ({ ...v, [field.name]: e.target.value }))}
-                />
-              )}
-              <small>
-                {field.hint ? `${field.hint} ` : ""}
-                {(values[field.name] ?? "").length}/{field.maxLength}
-              </small>
-            </label>
-          ))}
-          <button type="submit" className="auth-submit" disabled={pending || mission.pola.some((f) => !(values[f.name] ?? "").trim())}>
-            {pending ? "Agent pracuje…" : "Uruchom misję"}
+              );
+            }
+            return (
+              <MissionInput
+                step={step}
+                key={`${mission.id}-${field.name}`}
+                field={field}
+                value={values[field.name] ?? ""}
+                disabled={pending}
+                onChange={(value) => setValues((v) => ({ ...v, [field.name]: value }))}
+              />
+            );
+          })}
+          {/* 27.11: przycisk mówi, czego jeszcze brakuje; aktywny dopiero, gdy wszystko jest wybrane */}
+          <button type="submit" className="auth-submit mission-run-btn" disabled={pending || missing !== null}>
+            {pending ? "Agent pracuje…" : missing ?? "Uruchom misję"}
           </button>
         </form>
       )}
@@ -210,6 +217,7 @@ export default function MissionsForm({ missions }: { missions: PublicMission[] }
       {saved && (
         <section className="mission-runs" aria-label="Ostatnie wykonania">
           <h3>Ostatnie wykonania</h3>
+          <p className="mission-saved-note">Wyniki tej misji są zapisywane na Twoim koncie (widzisz je tylko Ty). Agent niczego nie wysyła.</p>
           {runsError ? (
             <p className="hint">{runsError}</p>
           ) : runs.length === 0 ? (
@@ -318,4 +326,258 @@ export default function MissionsForm({ missions }: { missions: PublicMission[] }
       )}
     </div>
   );
+}
+
+// 27.11 (wygląd): jedno pole formularza misji – zwykłe pole, lista do wyboru (+ „inna…”) albo znaczniki do zaznaczenia.
+function MissionInput({ step, field, value, disabled, onChange }: { step: number; field: MissionField; value: string; disabled: boolean; onChange: (value: string) => void }) {
+  const [other, setOther] = useState(false);
+  const [extra, setExtra] = useState("");
+
+  if (field.multi) {
+    const multi = field.multi;
+    const picked = value.split(",").map((v) => v.trim()).filter(Boolean);
+    const all = [...multi.choices, ...picked.filter((p) => !multi.choices.includes(p))];
+    const toggle = (item: string) => {
+      const next = picked.includes(item) ? picked.filter((p) => p !== item) : picked.length < multi.max ? [...picked, item] : picked;
+      onChange(next.join(", "));
+    };
+    const addExtra = () => {
+      const item = extra.trim().replace(/,/g, " ");
+      if (item && !picked.includes(item) && picked.length < multi.max) onChange([...picked, item].join(", "));
+      setExtra("");
+      setOther(false);
+    };
+    return (
+      <div className="mission-field" role="group" aria-label={field.label}>
+        <StepTitle step={step} label={field.label} count={`${picked.length}/${multi.max}`} />
+        <div className="chip-row">
+          {all.map((item) => (
+            <button
+              key={item}
+              type="button"
+              className={`chip${picked.includes(item) ? " chip-on" : ""}`}
+              aria-pressed={picked.includes(item)}
+              disabled={disabled || (!picked.includes(item) && picked.length >= multi.max)}
+              onClick={() => toggle(item)}
+            >
+              {item}
+            </button>
+          ))}
+          {!other && (
+            <button type="button" className="chip chip-add" disabled={disabled || picked.length >= multi.max} onClick={() => setOther(true)}>
+              + inne
+            </button>
+          )}
+        </div>
+        {other && (
+          <div className="chip-other">
+            <input
+              type="text"
+              aria-label={`${field.label} – inne`}
+              value={extra}
+              maxLength={60}
+              autoFocus
+              disabled={disabled}
+              onChange={(e) => setExtra(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  addExtra();
+                }
+              }}
+            />
+            <button type="button" className="logout pref-save" disabled={disabled || !extra.trim()} onClick={addExtra}>
+              Dodaj
+            </button>
+            <button type="button" className="logout" onClick={() => { setOther(false); setExtra(""); }}>
+              Anuluj
+            </button>
+          </div>
+        )}
+        <small className="mission-hint">Zaznacz od {multi.min} do {multi.max}.</small>
+      </div>
+    );
+  }
+
+  if (field.choices) {
+    // 27.11 (wygląd): jeden wybór znacznikiem (np. „Dla kogo wybieramy”) + „+ inne” z polem do wpisania.
+    const choices = field.choices;
+    const custom = value && !choices.includes(value) ? value : null;
+    const pick = (item: string) => onChange(value === item ? "" : item);
+    return (
+      <div className="mission-field" role="group" aria-label={field.label}>
+        <StepTitle step={step} label={field.label} count={value ? "1/1" : "0/1"} />
+        <div className="chip-row">
+          {[...choices, ...(custom ? [custom] : [])].map((item) => (
+            <button key={item} type="button" className={`chip${value === item ? " chip-on" : ""}`} aria-pressed={value === item} disabled={disabled} onClick={() => pick(item)}>
+              {item}
+            </button>
+          ))}
+          {!other && (
+            <button type="button" className="chip chip-add" disabled={disabled} onClick={() => setOther(true)}>
+              + inne
+            </button>
+          )}
+        </div>
+        {other && (
+          <div className="chip-other">
+            <input
+              type="text"
+              aria-label={`${field.label} – inne`}
+              value={extra}
+              maxLength={field.maxLength}
+              placeholder={field.placeholder}
+              autoFocus
+              disabled={disabled}
+              onChange={(e) => setExtra(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  if (extra.trim()) onChange(extra.trim());
+                  setExtra("");
+                  setOther(false);
+                }
+              }}
+            />
+            <button
+              type="button"
+              className="logout pref-save"
+              disabled={disabled || !extra.trim()}
+              onClick={() => {
+                onChange(extra.trim());
+                setExtra("");
+                setOther(false);
+              }}
+            >
+              Dodaj
+            </button>
+            <button type="button" className="logout" onClick={() => { setOther(false); setExtra(""); }}>
+              Anuluj
+            </button>
+          </div>
+        )}
+        <small className="mission-hint">Wybierz jedną pozycję albo dopisz własną.</small>
+      </div>
+    );
+  }
+
+  return (
+    <label className="mission-field">
+      {step ? <StepTitle step={step} label={field.label} /> : field.label}
+      {field.multiline ? (
+        <textarea rows={10} value={value} maxLength={field.maxLength} placeholder={field.placeholder} disabled={disabled} onChange={(e) => onChange(e.target.value)} />
+      ) : (
+        <input type="text" value={value} maxLength={field.maxLength} placeholder={field.placeholder} disabled={disabled} onChange={(e) => onChange(e.target.value)} />
+      )}
+      <small>
+        {field.hint ? `${field.hint} ` : ""}
+        {value.length}/{field.maxLength}
+      </small>
+    </label>
+  );
+}
+
+// 27.11 (wygląd): grupa pól jako znaczniki – np. „Firmy do porównania”: zaznacz dokładnie tyle, ile jest pól (3).
+function GroupChips({ step, label, fields, values, disabled, onChange }: { step: number; label: string; fields: MissionField[]; values: string[]; disabled: boolean; onChange: (picked: string[]) => void }) {
+  const [other, setOther] = useState(false);
+  const [extra, setExtra] = useState("");
+  const max = fields.length;
+  const choices = fields[0].choices ?? [];
+  const picked = values.filter(Boolean);
+  const all = [...choices, ...picked.filter((p) => !choices.includes(p))];
+  const toggle = (item: string) => {
+    const next = picked.includes(item) ? picked.filter((p) => p !== item) : picked.length < max ? [...picked, item] : picked;
+    onChange(next);
+  };
+  const addExtra = () => {
+    const item = extra.trim();
+    if (item && !picked.some((p) => p.toLowerCase() === item.toLowerCase()) && picked.length < max) onChange([...picked, item.slice(0, fields[0].maxLength)]);
+    setExtra("");
+    setOther(false);
+  };
+  return (
+    <div className="mission-field" role="group" aria-label={label}>
+      <StepTitle step={step} label={label} count={`${picked.length}/${max}`} />
+      <div className="chip-row">
+        {all.map((item) => (
+          <button
+            key={item}
+            type="button"
+            className={`chip${picked.includes(item) ? " chip-on" : ""}`}
+            aria-pressed={picked.includes(item)}
+            disabled={disabled || (!picked.includes(item) && picked.length >= max)}
+            onClick={() => toggle(item)}
+          >
+            {picked.includes(item) ? `${picked.indexOf(item) + 1}. ${item}` : item}
+          </button>
+        ))}
+        {!other && (
+          <button type="button" className="chip chip-add" disabled={disabled || picked.length >= max} onClick={() => setOther(true)}>
+            + inna
+          </button>
+        )}
+      </div>
+      {other && (
+        <div className="chip-other">
+          <input
+            type="text"
+            aria-label={`${label} – inna`}
+            value={extra}
+            maxLength={fields[0].maxLength}
+            autoFocus
+            disabled={disabled}
+            onChange={(e) => setExtra(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                addExtra();
+              }
+            }}
+          />
+          <button type="button" className="logout pref-save" disabled={disabled || !extra.trim()} onClick={addExtra}>
+            Dodaj
+          </button>
+          <button type="button" className="logout" onClick={() => { setOther(false); setExtra(""); }}>
+            Anuluj
+          </button>
+        </div>
+      )}
+      <small className="mission-hint">Zaznacz {max}. Kolejność zaznaczania = kolejność w tabeli.</small>
+    </div>
+  );
+}
+
+// 27.11: nagłówek kroku – numer w żółtym kółku, nazwa i licznik zaraz obok.
+function StepTitle({ step, label, count }: { step: number; label: string; count?: string }) {
+  return (
+    <span className="step-title">
+      {step > 0 && <span className="step-num" aria-hidden="true">{step}</span>}
+      <span className="step-label">{label}</span>
+      {count && <span className="step-count">{count}</span>}
+    </span>
+  );
+}
+
+// 27.11: co jeszcze trzeba uzupełnić (null = wszystko gotowe). Te same progi co na serwerze.
+function missingText(fields: MissionField[], values: Record<string, string>): string | null {
+  const seen = new Set<string>();
+  for (const f of fields) {
+    if (f.group) {
+      if (seen.has(f.group.id)) continue;
+      seen.add(f.group.id);
+      const members = fields.filter((g) => g.group?.id === f.group?.id);
+      const have = members.filter((g) => (values[g.name] ?? "").trim()).length;
+      if (have < members.length) return `Wybierz jeszcze ${members.length - have}: ${f.group.label.toLowerCase()}`;
+      continue;
+    }
+    const v = (values[f.name] ?? "").trim();
+    if (f.multi) {
+      const n = v ? v.split(",").map((x) => x.trim()).filter(Boolean).length : 0;
+      if (n < f.multi.min) return `Zaznacz jeszcze ${f.multi.min - n}: ${f.label.toLowerCase()}`;
+      continue;
+    }
+    if (!v) return f.choices ? `Wybierz: ${f.label.toLowerCase()}` : `Uzupełnij: ${f.label.toLowerCase()}`;
+    if (f.minLength && v.length < f.minLength) return `Dopisz więcej: ${f.label.toLowerCase()}`;
+  }
+  return null;
 }

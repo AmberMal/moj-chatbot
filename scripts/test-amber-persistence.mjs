@@ -451,8 +451,8 @@ console.log("\n=== 8. Standard: lista rozmów, numer w adresie, format ===");
   for (const [raw, expected] of [["12", 12], ["1", 1], ["0", null], ["-1", null], ["1.5", null], ["01", null], ["abc", null], ["", null], [null, null], ["12abc", null], ["99999999999999999", null]]) {
     check(`parseConversationParam(${JSON.stringify(raw)}) → ${expected}`, parseConversationParam(raw) === expected);
     const target = conversationFromSearch(raw === null ? "" : `?c=${raw}`);
-    check(`  przeglądarka: ?c=${raw ?? ""} → ${expected === null ? "ostatnia rozmowa" : `rozmowa ${expected}`} (ta sama reguła)`,
-      expected === null ? target.kind === "latest" : target.kind === "id" && target.id === expected);
+    check(`  przeglądarka: ?c=${raw ?? ""} → ${expected === null ? "nowa rozmowa (od 27.11)" : `rozmowa ${expected}`} (ta sama reguła)`,
+      expected === null ? target.kind === "new" : target.kind === "id" && target.id === expected);
   }
   check("?new=1 → nowa rozmowa (bez wczytywania)", conversationFromSearch("?new=1").kind === "new" && conversationFromSearch("?new=1&c=5").kind === "new");
   check("Adresy: /?c=7, /?new=1, /api/conversations/7", conversationPageUrl(7) === "/?c=7" && NEW_CONVERSATION_URL === "/?new=1" && conversationApiUrl(7) === "/api/conversations/7");

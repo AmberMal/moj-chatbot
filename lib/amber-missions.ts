@@ -32,6 +32,12 @@ export type MissionField = {
   multiline?: boolean;
   minLength?: number;
   tooShort?: string;
+  // 27.11 (wygląd): lista do wyboru zamiast pisania (+ „inna…” z polem do wpisania).
+  choices?: readonly string[];
+  // 27.11 (wygląd): znaczniki do zaznaczenia (wartość = zaznaczone, po przecinku), min–max sztuk.
+  multi?: { choices: readonly string[]; min: number; max: number };
+  // 27.11 (wygląd): pola z tą samą grupą formularz pokazuje razem jako znaczniki – zaznaczone trafiają po kolei do pól.
+  group?: { id: string; label: string };
 };
 
 // Kontrakt misji pokazywany na stronie w rozwijanym opisie.
@@ -248,6 +254,20 @@ export const MAX_CRITERIA = 5;
 export const NO_DATA = "brak danych";
 const COMPANY_FIELDS = ["firma1", "firma2", "firma3"] as const;
 
+// 27.11 (wygląd): podpowiedzi do wyboru w formularzu Porównania (wybór Malwiny). „inna…” pozwala wpisać dowolną nazwę.
+export const COMPANY_CHOICES = ["Ajax", "Texecom", "Pyronix", "Hikvision", "Dahua", "Honeywell", "Risco", "Paxton"] as const;
+export const CRITERIA_CHOICES = [
+  "cena",
+  "gwarancja",
+  "aplikacja mobilna",
+  "czujki bezprzewodowe",
+  "zgodność z normą EN 50131",
+  "monitoring w chmurze",
+  "łatwość montażu",
+  "dostępność części w UK",
+] as const;
+export const AUDIENCE_CHOICES = ["dom jednorodzinny", "mieszkanie", "małe biuro", "sklep", "magazyn", "wynajmowane mieszkanie (landlord)"] as const;
+
 export function parseCriteria(text: string): string[] {
   return text.split(",").map((c) => c.trim().replace(/\s+/g, " ")).filter(Boolean);
 }
@@ -398,14 +418,21 @@ const COMPARISON: MissionDef = {
   ikona: "⚖️",
   krotko: "Trzy firmy → tabela i rekomendacja",
   nazwa: "Porównanie trzech firm",
-  opis: "Wpisz trzy firmy lub produkty i kryteria – agent wyszuka informacje o każdej firmie i pokaże tabelę porównania z rekomendacją i źródłami.",
+  opis: "Wybierz trzy firmy lub produkty, kryteria i odbiorcę – agent wyszuka informacje o każdej firmie i pokaże tabelę porównania z rekomendacją i źródłami.",
   pola: [
-    { name: "firma1", label: "Firma 1", maxLength: MAX_COMPANY_CHARS, placeholder: "np. Ajax" },
-    { name: "firma2", label: "Firma 2", maxLength: MAX_COMPANY_CHARS, placeholder: "np. Texecom" },
-    { name: "firma3", label: "Firma 3", maxLength: MAX_COMPANY_CHARS, placeholder: "np. Pyronix" },
-    { name: "kryteria", label: "Kryteria", maxLength: MAX_CRITERIA_CHARS, placeholder: "np. cena, aplikacja mobilna, gwarancja", hint: `Po przecinku, od ${MIN_CRITERIA} do ${MAX_CRITERIA} kryteriów.` },
+    { name: "firma1", label: "Firma 1", maxLength: MAX_COMPANY_CHARS, group: { id: "firmy", label: "Firmy do porównania" }, placeholder: "np. Ajax", choices: COMPANY_CHOICES },
+    { name: "firma2", label: "Firma 2", maxLength: MAX_COMPANY_CHARS, group: { id: "firmy", label: "Firmy do porównania" }, placeholder: "np. Texecom", choices: COMPANY_CHOICES },
+    { name: "firma3", label: "Firma 3", maxLength: MAX_COMPANY_CHARS, group: { id: "firmy", label: "Firmy do porównania" }, placeholder: "np. Pyronix", choices: COMPANY_CHOICES },
+    {
+      name: "kryteria",
+      label: "Kryteria",
+      maxLength: MAX_CRITERIA_CHARS,
+      placeholder: "np. cena, aplikacja mobilna, gwarancja",
+      hint: `Zaznacz od ${MIN_CRITERIA} do ${MAX_CRITERIA} kryteriów.`,
+      multi: { choices: CRITERIA_CHOICES, min: MIN_CRITERIA, max: MAX_CRITERIA },
+    },
     // Dla szybkich: dla kogo wybieramy – rekomendacja bierze to pod uwagę.
-    { name: "dla_kogo", label: "Dla kogo wybieramy", maxLength: MAX_AUDIENCE_CHARS, placeholder: "np. dla trzyosobowego biura z małym budżetem" },
+    { name: "dla_kogo", label: "Dla kogo wybieramy", maxLength: MAX_AUDIENCE_CHARS, placeholder: "np. dla trzyosobowego biura z małym budżetem", choices: AUDIENCE_CHOICES },
   ],
   instrukcja: COMPARISON_INSTRUCTIONS,
   wyszukiwanie: true,
@@ -568,7 +595,7 @@ const VISIT: MissionDef = {
       multiline: true,
       minLength: MIN_VISIT_NOTES_CHARS,
       tooShort: `Notatki są za krótkie (co najmniej ${MIN_VISIT_NOTES_CHARS} znaków). Dopisz, co zrobiono lub znaleziono, jaki to system lub sprzęt i u kogo była wizyta.`,
-      placeholder: "np. serwis alarmu u p. Nowaka, centrala Texecom, słaba bateria w centrali, czujka w kuchni bez reakcji…",
+      placeholder: "Wklej notatkę",
     },
   ],
   // Standard: kontrakt misji widoczny na stronie w rozwijanym opisie.

@@ -13,7 +13,7 @@ function readCards(data: unknown): Card[] | null {
   return Array.isArray(karty) ? (karty as Card[]) : null;
 }
 
-export default function TriageForm() {
+export default function TriageForm({ maxEmails }: { maxEmails: number }) {
   const [text, setText] = useState("");
   const [cards, setCards] = useState<Card[]>([]);
   const [error, setError] = useState("");
@@ -61,16 +61,22 @@ export default function TriageForm() {
   return (
     <>
       <form className="triage-form" onSubmit={handleSubmit} aria-busy={pending}>
-        <label htmlFor="emails">Maile</label>
-        <textarea
-          id="emails"
-          rows={14}
-          value={text}
-          disabled={pending}
-          onChange={(event) => setText(event.target.value)}
-          placeholder={"Od: …\nTemat: …\nTreść maila…\n---\nOd: …\nTemat: …\nTreść kolejnego maila…"}
-        />
-        <button type="submit" className="auth-submit" disabled={pending || !text.trim()}>
+        {/* 27.11 (wygląd, wariant 1): duże pole „Wklej maile tutaj” z podpowiedzią w środku */}
+        <label htmlFor="emails" className="sr-only">
+          Maile
+        </label>
+        <div className={`triage-drop${text ? " has-text" : ""}`}>
+          <textarea id="emails" rows={12} value={text} disabled={pending} onChange={(event) => setText(event.target.value)} />
+          {!text && (
+            <div className="triage-drop-hint" aria-hidden="true">
+              <span className="triage-drop-icon">✉</span>
+              <strong>Wklej maile tutaj</strong>
+              <span>oddzielone linią z trzema myślnikami (---), najwyżej {maxEmails}</span>
+            </div>
+          )}
+        </div>
+        <button type="submit" className="auth-submit triage-sort" disabled={pending || !text.trim()}>
+          <span aria-hidden="true">✨ </span>
           {pending ? "Agent sortuje…" : "Posortuj"}
         </button>
       </form>

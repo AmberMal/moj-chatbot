@@ -198,10 +198,17 @@ export default function Chat({
   setMessagesRef.current = setMessages;
 
   // Lekcja 5, Warsztat 2: po otwarciu strony wczytujemy rozmowę z bazy (serwer najpierw sprawdza sesję):
-  // /?c=12 – wybraną (Standard, /history), /?new=1 – żadnej (nowa rozmowa), / – ostatnią.
+  // /?c=12 – wybraną (Standard, /history); / i /?new=1 – nowa rozmowa z powitaniem (od 27.11 nie ostatnia).
   useEffect(() => {
     let cancelled = false;
-    const target = conversationFromSearch(window.location.search);
+    let target = conversationFromSearch(window.location.search);
+    // 27.11 (decyzja Malwiny): odświeżenie strony (F5 / Cmd+R) też zaczyna nową rozmowę z powitaniem.
+    // Rozmowa zostaje w bazie – otwiera się ją z Historii.
+    const navigation = performance.getEntriesByType("navigation")[0] as PerformanceNavigationTiming | undefined;
+    if (navigation?.type === "reload" && target.kind === "id") {
+      target = { kind: "new" };
+      window.history.replaceState(null, "", "/");
+    }
     if (target.kind === "new") {
       setHistoryStatus("ready");
       return;
@@ -446,37 +453,49 @@ export default function Chat({
             {email && <span className="user-email">{email}</span>}
           </span>
         </span>
+        {/* 27.11: „Wyloguj” obok profilu (u góry); na wąskim oknie – na końcu paska */}
+        <button type="button" className="logout logout-exit" onClick={handleLogout}>
+          <span className="exit-icon" aria-hidden="true">⏻</span>
+          Wyloguj
+        </button>
+        {/* 27.11: przyciski w osobnym bloku – na szerokim oknie zaczynają się równo z oknem wiadomości, a profil zostaje u góry */}
+        <nav className="toolbar-nav" aria-label="Menu">
         {/* Lekcja 5, Warsztat 2: nowa rozmowa (stara zostaje w bazie) */}
         <button type="button" className="logout" disabled={isLocked} onClick={handleNewConversation}>
+          <span className="nav-icon" aria-hidden="true">➕</span>
           Nowa rozmowa
         </button>
         {/* Lekcja 5, Warsztat 2 (Standard): lista zapisanych rozmów */}
         <Link href={HISTORY_PAGE} className="logout">
+          <span className="nav-icon" aria-hidden="true">🕘</span>
           Historia
         </Link>
         {/* Lekcja 5, Warsztat 3 (Standard): profil klienta */}
         <Link href={PROFILE_PAGE} className="logout">
+          <span className="nav-icon" aria-hidden="true">👤</span>
           Profil
         </Link>
         {/* Lekcja 6, Warsztat 2: baza wiedzy (wklejanie dokumentów) */}
         <Link href="/upload" className="logout">
+          <span className="nav-icon" aria-hidden="true">📚</span>
           Baza wiedzy
         </Link>
         {/* Lekcja 4, Warsztat 3: link do Dashboardu podróży */}
         <Link href="/dashboard" className="logout">
+          <span className="nav-icon" aria-hidden="true">🧭</span>
           Dashboard podróży
         </Link>
         {/* Lekcja 8, Warsztat 1: misja „Triage maili” */}
         <Link href="/email-triage" className="logout">
+          <span className="nav-icon" aria-hidden="true">📨</span>
           Triage
         </Link>
         {/* Lekcja 8, Warsztat 2: misje agenta */}
         <Link href="/misje" className="logout">
+          <span className="nav-icon" aria-hidden="true">🎯</span>
           Misje
         </Link>
-        <button type="button" className="logout logout-exit" onClick={handleLogout}>
-          Wyloguj
-        </button>
+        </nav>
       </div>
 
       <div className="messages" aria-label="Rozmowa" aria-live="polite">

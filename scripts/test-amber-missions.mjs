@@ -284,11 +284,11 @@ check("Formularz: data wykonania i ponumerowane źródła", /Misja wykonana:/.te
 check("Formularz: „Kopiuj jako tekst” przy wyniku obu misji", /Kopiuj jako tekst/.test(form) && /reportToText\(report\)/.test(form) && /Skopiowano ✓/.test(form));
 check("Formularz: rozwijany opis misji (cel, narzędzia, wynik, kontrola)", /<details>/.test(form) && /Jak działa ta misja/.test(form) && /Sprawdź przed użyciem/.test(form));
 check("Formularz: „Ostatnie wykonania”, kliknięcie otwiera zapisany wynik", /Ostatnie wykonania/.test(form) && /openRun\(run\)/.test(form) && /Zapisany wynik z/.test(form) && /\/api\/missions\/runs/.test(form));
-check("Strona: informacja o zapisie wyników", /są zapisywane na Twoim koncie/.test(read("app/misje/page.tsx")));
+check("Informacja o zapisie wyników (przy „Ostatnich wykonaniach”)", /są zapisywane na Twoim koncie/.test(form));
 check("Formularz: pole wieloliniowe (textarea)", /field\.multiline \?/.test(form) && /<textarea/.test(form));
 check("Formularz: tabela i wyszarzone „brak danych”", /mission-table/.test(form) && /no-data/.test(form));
 check("Formularz: klikalne linki w nowej karcie", /target="_blank" rel="noopener noreferrer"/.test(form));
-check("Link „Misje” w nawigacji", /href="\/misje"[^>]*>\s*Misje/.test(read("app/chat.tsx")));
+check("Link „Misje” w nawigacji", /href="\/misje"[^>]*>[\s\S]{0,120}?Misje\s*<\/Link>/.test(read("app/chat.tsx")));
 
 console.log(`\nWynik: ${ok} zaliczonych, ${bad} niezaliczonych.`);
 if (bad) process.exitCode = 1;

@@ -13,7 +13,7 @@ export default async function MissionsPage() {
   if (!user) redirect(loginUrl("/misje"));
 
   return (
-    <main className="chat triage-page">
+    <main className="chat triage-page missions-page">
       {/* 27.11: powrót do czatu po prawej (kolumna przycisków), jak na innych stronach */}
       <div className="toolbar">
         <Link href="/" className="logout logout-text">
@@ -21,7 +21,6 @@ export default async function MissionsPage() {
         </Link>
       </div>
       <h1>Misje</h1>
-      <p className="hint">Wybierz misję, uzupełnij pola i uruchom agenta. Misja może trwać do minuty. Agent niczego nie wysyła; wyniki misji „Notatka z wizyty” są zapisywane na Twoim koncie (widzisz je tylko Ty).</p>
       <MissionsForm missions={publicMissions()} />
     </main>
   );
