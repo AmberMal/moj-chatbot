@@ -18,7 +18,7 @@ export default async function MissionsPage() {
         <Link href="/">← Wróć do czatu</Link>
       </div>
       <h1>Misje</h1>
-      <p className="hint">Wybierz misję, uzupełnij pola i uruchom agenta. Misja może trwać do minuty – agent niczego nie zapisuje ani nie wysyła.</p>
+      <p className="hint">Wybierz misję, uzupełnij pola i uruchom agenta. Misja może trwać do minuty. Agent niczego nie wysyła; wyniki misji „Notatka z wizyty” są zapisywane na Twoim koncie (widzisz je tylko Ty).</p>
       <MissionsForm missions={publicMissions()} />
     </main>
   );

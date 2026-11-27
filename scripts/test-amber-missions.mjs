@@ -9,6 +9,8 @@ import {
   VISIT_INSTRUCTIONS, VISIT_SIGNATURE, NO_KB_SOURCES_TEXT, VISIT_MISSING_TEXT, validateVisitOutput, buildVisit,
 } from "../lib/amber-missions.ts";
 import { reportToText } from "../lib/amber-mission-text.ts";
+import { createListRunsHandler, createGetRunHandler, inputPreview, parseStoredReport, RECENT_RUNS, RUNS_MESSAGES } from "../lib/amber-mission-runs.ts";
+import { isSavedMission } from "../lib/amber-missions.ts";
 
 let ok = 0, bad = 0;
 const check = (name, cond, extra = "") => { if (cond) { ok++; console.log(`✅ ${name}`); } else { bad++; console.log(`❌ NIE: ${name} ${extra}`); } };
@@ -214,6 +216,57 @@ check("Instrukcja wizyty: dane, ceny tylko z bazy, DO UZUPEŁNIENIA, bez obietni
   check("Wizyta: brak bazy wiedzy → 500 z komunikatem", noKb.status === 500);
 }
 
+// --- W3 Dla szybkich: zapisane wykonania (mission_runs)
+check("Zapisuje się tylko „Notatka z wizyty”", isSavedMission("wizyta") && !isSavedMission("raport") && !isSavedMission("porownanie") && !isSavedMission("x"));
+{
+  const saved = [];
+  const saveRun = async (row) => { saved.push(row); return 41 + saved.length; };
+  const okVisit = await createMissionHandler(deps({ searchKnowledge: async () => ({ ok: true, fragmenty: [] }), saveRun, now: () => new Date("2026-11-27T14:00:00Z") }))(post({ misja: "wizyta", pola: { notatki: "serwis: bateria w centrali słaba, czujka w kuchni" } }));
+  const dv = await okVisit.json();
+  check("Udana misja → zapis w mission_runs (mission, input, result) i id w odpowiedzi", okVisit.status === 200 && saved.length === 1 && saved[0].mission === "wizyta" && JSON.parse(saved[0].input).notatki.startsWith("serwis") && JSON.parse(saved[0].result).wykonano === "2026-11-27T14:00:00.000Z" && dv.zapis.ok === true && dv.zapis.id === 42);
+  check("Zapis bez user_id z aplikacji (wpisuje go baza)", !("user_id" in saved[0]));
+  await createMissionHandler(deps({ saveRun }))(post({ misja: "raport", pola: { temat: "Czujniki dymu" } }));
+  check("Raport się nie zapisuje", saved.length === 1);
+  const failSave = await createMissionHandler(deps({ searchKnowledge: async () => ({ ok: true, fragmenty: [] }), saveRun: async () => { throw new Error("db"); } }))(post({ misja: "wizyta", pola: { notatki: "serwis: bateria w centrali słaba, czujka w kuchni" } }));
+  const df = await failSave.json();
+  check("Nieudany zapis → wynik i tak widoczny, z komunikatem", failSave.status === 200 && df.raport && df.zapis.ok === false && /Nie udało się zapisać/.test(df.zapis.komunikat));
+  const failRun = await createMissionHandler(deps({ searchKnowledge: async () => ({ ok: true, fragmenty: [] }), saveRun, run: async () => ({ ok: false, kind: "provider_error", details: "x" }) }))(post({ misja: "wizyta", pola: { notatki: "serwis: bateria w centrali słaba, czujka w kuchni" } }));
+  check("Nieudana misja → nic nie zapisuje", failRun.status === 502 && saved.length === 1);
+}
+{
+  let dbCalls = 0;
+  const rows = [{ id: 7, created_at: "2026-11-27T14:05:00Z", input: JSON.stringify({ notatki: "oględziny u p. Wiśniewskiej, dom jednorodzinny – stary alarm zamontowany przez inną firmę, klientka chce przejęcia" }) }];
+  const stored = { id: 7, created_at: "2026-11-27T14:05:00Z", mission: "wizyta", result: JSON.stringify({ tytul: "Notatka z wizyty", sekcje: [] }) };
+  const db = {
+    insertRun: async () => 1,
+    listRuns: async (mission, limit) => { dbCalls++; return mission === "wizyta" && limit === RECENT_RUNS ? rows : []; },
+    getRun: async (id) => { dbCalls++; return id === 7 ? stored : null; }, // inne id: RLS nie zwraca cudzych wierszy
+  };
+  const rd = (extra = {}) => ({ getSession: () => ({ userId: "u1" }), getDb: () => db, isSavedMission, log: () => {}, ...extra });
+  const g = (url) => new Request(url);
+  const l401 = await createListRunsHandler(rd({ getSession: () => null }))(g("http://localhost/api/missions/runs?misja=wizyta"));
+  check("Lista wykonań bez zalogowania → 401, bez bazy", l401.status === 401 && dbCalls === 0);
+  const l = await createListRunsHandler(rd())(g("http://localhost/api/missions/runs?misja=wizyta"));
+  const ld = await l.json();
+  check("Lista: 5 ostatnich, z datą i krótkim podglądem", RECENT_RUNS === 5 && l.status === 200 && ld.wykonania.length === 1 && ld.wykonania[0].id === 7 && ld.wykonania[0].utworzono === "2026-11-27T14:05:00Z" && ld.wykonania[0].podglad.endsWith("…") && ld.wykonania[0].podglad.length <= 71);
+  check("Lista dla misji bez zapisu → 400", (await createListRunsHandler(rd())(g("http://localhost/api/missions/runs?misja=raport"))).status === 400);
+  dbCalls = 0;
+  const g401 = await createGetRunHandler(rd({ getSession: () => null }))(g("http://localhost/api/missions/runs/7"), "7");
+  check("Odczyt wyniku bez zalogowania → 401, bez bazy", g401.status === 401 && dbCalls === 0);
+  const gOk = await createGetRunHandler(rd())(g("http://localhost/api/missions/runs/7"), "7");
+  const gd = await gOk.json();
+  check("Kliknięcie otwiera zapisany wynik", gOk.status === 200 && gd.raport.tytul === "Notatka z wizyty" && gd.utworzono === stored.created_at);
+  const gOther = await createGetRunHandler(rd())(g("http://localhost/api/missions/runs/8"), "8");
+  check("Cudze / nieistniejące wykonanie → 404", gOther.status === 404 && (await gOther.json()).komunikat === RUNS_MESSAGES.notFound);
+  check("Zły numer → 400", (await createGetRunHandler(rd())(g("http://localhost/api/missions/runs/abc"), "abc")).status === 400);
+  check("Uszkodzony zapis → null (nie pokazujemy)", parseStoredReport("{zly") === null && parseStoredReport(JSON.stringify({ x: 1 })) === null);
+  check("Podgląd danych: jedna linijka", inputPreview(JSON.stringify({ notatki: "a\nb" })) === "a b");
+}
+const runsLib = read("lib/amber-mission-runs.ts");
+check("mission_runs: klient zalogowanej osoby, bez klucza secret", /from\("mission_runs"\)/.test(runsLib) && !/SECRET|getSupabase\(/.test(runsLib));
+check("Endpointy wykonań: sesja + klient zalogowanej osoby", ["app/api/missions/runs/route.ts", "app/api/missions/runs/[id]/route.ts"].every((f) => { const t = read(f); return /getApiSession/.test(t) && /createSupabaseServerClient/.test(t) && /force-dynamic/.test(t) && !/getSupabase\(/.test(t); }));
+check("Zapis w /api/missions klientem zalogowanej osoby", /saveRun: client \? \(row\) => createSupabaseMissionRunsDb\(client\)\.insertRun\(row\)/.test(read("app/api/missions/route.ts")));
+
 // --- pliki
 const lib = read("lib/amber-missions.ts");
 check("Misje: limit kroków jak w czacie (AGENT_STEP_LIMIT), 60 s", /isStepCount\(stepLimit\)/.test(lib) && /stepLimit: AGENT_STEP_LIMIT/.test(read("app/api/missions/route.ts")) && /MISSION_TIMEOUT_MS = 60_000/.test(lib));
@@ -230,6 +283,8 @@ check("Formularz: „Uruchom misję”, „Agent pracuje…”, blokada, komunik
 check("Formularz: data wykonania i ponumerowane źródła", /Misja wykonana:/.test(form) && /mission-sources/.test(form) && /\[\{i \+ 1\}\]/.test(form));
 check("Formularz: „Kopiuj jako tekst” przy wyniku obu misji", /Kopiuj jako tekst/.test(form) && /reportToText\(report\)/.test(form) && /Skopiowano ✓/.test(form));
 check("Formularz: rozwijany opis misji (cel, narzędzia, wynik, kontrola)", /<details>/.test(form) && /Jak działa ta misja/.test(form) && /Sprawdź przed użyciem/.test(form));
+check("Formularz: „Ostatnie wykonania”, kliknięcie otwiera zapisany wynik", /Ostatnie wykonania/.test(form) && /openRun\(run\)/.test(form) && /Zapisany wynik z/.test(form) && /\/api\/missions\/runs/.test(form));
+check("Strona: informacja o zapisie wyników", /są zapisywane na Twoim koncie/.test(read("app/misje/page.tsx")));
 check("Formularz: pole wieloliniowe (textarea)", /field\.multiline \?/.test(form) && /<textarea/.test(form));
 check("Formularz: tabela i wyszarzone „brak danych”", /mission-table/.test(form) && /no-data/.test(form));
 check("Formularz: klikalne linki w nowej karcie", /target="_blank" rel="noopener noreferrer"/.test(form));

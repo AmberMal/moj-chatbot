@@ -61,6 +61,8 @@ export type MissionDef = {
   wyszukiwanie: boolean; // czy agent dostaje wyszukiwanie w internecie
   // Warsztat 3: czy serwer przeszukuje bazę wiedzy (ta sama funkcja co searchKnowledge) i daje fragmenty modelowi jako dane.
   bazaWiedzy?: boolean;
+  // Warsztat 3 (Dla szybkich): czy wyniki zapisują się w tabeli mission_runs (lista 5 ostatnich pod misją).
+  zapisuj?: boolean;
   // Dodatkowe sprawdzenie pól (np. liczba kryteriów). null = w porządku, tekst = komunikat dla użytkownika.
   checkFields?: (pola: Record<string, string>) => string | null;
   // Standard: misja w dwóch krokach – najpierw zebranie informacji ze źródłami (z wyszukiwaniem),
@@ -570,6 +572,7 @@ const VISIT: MissionDef = {
   instrukcja: VISIT_INSTRUCTIONS,
   wyszukiwanie: false,
   bazaWiedzy: true,
+  zapisuj: true,
   prompt: (pola, ctx) => {
     const fr = ctx?.fragmenty ?? [];
     const block = fr.length === 0
@@ -588,9 +591,12 @@ const VISIT: MissionDef = {
 
 export const MISSIONS: MissionDef[] = [RAPORT, COMPARISON, VISIT];
 
-export type PublicMission = Pick<MissionDef, "id" | "nazwa" | "opis" | "pola" | "kontrakt">;
+export type PublicMission = Pick<MissionDef, "id" | "nazwa" | "opis" | "pola" | "kontrakt" | "zapisuj">;
 export function publicMissions(): PublicMission[] {
-  return MISSIONS.map(({ id, nazwa, opis, pola, kontrakt }) => ({ id, nazwa, opis, pola, ...(kontrakt ? { kontrakt } : {}) }));
+  return MISSIONS.map(({ id, nazwa, opis, pola, kontrakt, zapisuj }) => ({ id, nazwa, opis, pola, ...(kontrakt ? { kontrakt } : {}), ...(zapisuj ? { zapisuj } : {}) }));
+}
+export function isSavedMission(id: unknown): boolean {
+  return findMission(id)?.zapisuj === true;
 }
 export function findMission(id: unknown): MissionDef | undefined {
   return typeof id === "string" ? MISSIONS.find((m) => m.id === id) : undefined;
@@ -613,6 +619,7 @@ export const MISSION_MESSAGES = {
   step_limit: "Agent zatrzymał się na limicie kroków, zanim skończył misję. Spróbuj ponownie albo zawęź temat.",
   interrupted: "Misja została przerwana. Spróbuj ponownie.",
   provider_error: "Błąd dostawcy AI (OpenRouter). Spróbuj ponownie za chwilę.",
+  saveFailed: "Nie udało się zapisać wyniku – jest widoczny tylko teraz.",
 } as const;
 
 export function readMissionFields(
@@ -759,6 +766,8 @@ export type MissionDeps = {
   stepLimit: number; // ten sam co w czacie: AGENT_STEP_LIMIT
   // Warsztat 3: wyszukiwanie w bazie wiedzy zalogowanej osoby (null = brak konfiguracji).
   searchKnowledge?: ((query: string) => Promise<SearchKnowledgeResult>) | null;
+  // Warsztat 3 (Dla szybkich): zapis wyniku w mission_runs (klient zalogowanej osoby, RLS). null = brak bazy.
+  saveRun?: ((row: { mission: string; input: string; result: string }) => Promise<number>) | null;
   run?: MissionRun;
   now?: () => Date;
   timeoutMs?: number;
@@ -805,7 +814,17 @@ export function createMissionHandler(deps: MissionDeps) {
         return json({ komunikat: MISSION_MESSAGES[result.kind] }, status);
       }
       // Standard: data i godzina wykonania misji pod wynikiem.
-      return json({ raport: { ...result.raport, wykonano: (deps.now ?? (() => new Date()))().toISOString() } });
+      const raport: MissionReport = { ...result.raport, wykonano: (deps.now ?? (() => new Date()))().toISOString() };
+      if (!mission.zapisuj) return json({ raport });
+      // Dla szybkich: zapis wyniku – nieudany zapis nie psuje wyniku, tylko dopisuje komunikat.
+      if (!deps.saveRun) return json({ raport, zapis: { ok: false, komunikat: MISSION_MESSAGES.saveFailed } });
+      try {
+        const id = await deps.saveRun({ mission: mission.id, input: JSON.stringify(fields.pola), result: JSON.stringify(raport) });
+        return json({ raport, zapis: { ok: true, id } });
+      } catch (error) {
+        log(`[Amber] /api/missions – zapis wyniku nieudany: ${error instanceof Error ? error.message : String(error)}`);
+        return json({ raport, zapis: { ok: false, komunikat: MISSION_MESSAGES.saveFailed } });
+      }
     } finally {
       clearTimeout(timer);
       req.signal?.removeEventListener("abort", onAbort);
