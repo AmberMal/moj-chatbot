@@ -24,6 +24,7 @@ type Message = { kind: "ok" | "error" | "progress"; text: string; extra?: string
 // Lekcja 6, Warsztat 2: formularz „Tytuł” + „Treść” → /api/upload.
 // Standard: postęp importu, blokada przycisku, lista dokumentów, zastępowanie po tytule, „Usuń”.
 // Dla szybkich (wyzwanie): wybór sposobu dzielenia tekstu – domyślnie „akapity”.
+// 27.11 (wygląd, wariant A): na górze „+ Dodaj dokument” (rozwija formularz), pod spodem tabela dokumentów.
 export default function UploadForm({ initialDocuments }: { initialDocuments: DocumentSummary[] }) {
   const [title, setTitle] = useState("");
   const [content, setContent] = useState("");
@@ -31,6 +32,8 @@ export default function UploadForm({ initialDocuments }: { initialDocuments: Doc
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<Message | null>(null);
   const [documents, setDocuments] = useState<DocumentSummary[]>(initialDocuments);
+  // Formularz zawsze zwinięty na start – rozwija go przycisk „+ Dodaj dokument” (decyzja Malwiny 27.11).
+  const [formOpen, setFormOpen] = useState(false);
 
   async function refreshList() {
     try {
@@ -155,7 +158,19 @@ export default function UploadForm({ initialDocuments }: { initialDocuments: Doc
 
   return (
     <>
-      <form className="profile-card upload-form" onSubmit={submit} noValidate>
+      <button
+        type="button"
+        className="logout upload-add"
+        aria-expanded={formOpen}
+        aria-controls="upload-form"
+        disabled={busy}
+        onClick={() => setFormOpen((open) => !open)}
+      >
+        {formOpen ? "× Zwiń formularz" : "+ Dodaj dokument"}
+      </button>
+
+      {formOpen && (
+      <form id="upload-form" className="profile-card upload-form" onSubmit={submit} noValidate>
         <label className="profile-label" htmlFor="upload-title">
           Tytuł
         </label>
@@ -192,27 +207,47 @@ export default function UploadForm({ initialDocuments }: { initialDocuments: Doc
           </div>
         )}
       </form>
+      )}
+
+      {/* Komunikat po usunięciu dokumentu, gdy formularz jest zwinięty */}
+      {!formOpen && message && (
+        <div className={message.kind === "error" ? "error" : "profile-ok"} role={message.kind === "error" ? "alert" : "status"}>
+          <p>{message.text}</p>
+          {message.extra && <p>{message.extra}</p>}
+        </div>
+      )}
 
       <section className="profile-card">
         <h2>Dokumenty w bazie wiedzy</h2>
         {documents.length === 0 ? (
-          <p className="hint upload-empty">Baza wiedzy jest pusta. Dodaj pierwszy dokument powyżej.</p>
+          <p className="hint upload-empty">Baza wiedzy jest pusta. Kliknij „+ Dodaj dokument” powyżej.</p>
         ) : (
-          <ul className="upload-list">
-            {documents.map((doc) => (
-              <li key={doc.id}>
-                <div className="upload-doc">
-                  <span className="history-title">{doc.title}</span>
-                  <span className="history-meta">
-                    dodano {formatAddedAt(doc.createdAt)} · {doc.chunks} fragmentów
-                  </span>
-                </div>
-                <button type="button" className="history-delete" disabled={busy} onClick={() => void remove(doc)}>
-                  Usuń
-                </button>
-              </li>
-            ))}
-          </ul>
+          <table className="upload-table">
+            <thead>
+              <tr>
+                <th scope="col">Tytuł</th>
+                <th scope="col">Fragmenty</th>
+                <th scope="col">Dodano</th>
+                <th scope="col">
+                  <span className="sr-only">Usuń</span>
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {documents.map((doc) => (
+                <tr key={doc.id}>
+                  <td className="history-title">{doc.title}</td>
+                  <td>{doc.chunks}</td>
+                  <td>{formatAddedAt(doc.createdAt)}</td>
+                  <td>
+                    <button type="button" className="history-delete" disabled={busy} onClick={() => void remove(doc)}>
+                      Usuń
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         )}
       </section>
     </>

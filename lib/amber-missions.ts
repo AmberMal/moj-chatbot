@@ -55,6 +55,9 @@ export type MissionDef = {
   id: string;
   nazwa: string;
   opis: string;
+  // 27.11 (wygląd): ikona i krótki opis na kafelku wyboru misji.
+  ikona: string;
+  krotko: string;
   pola: MissionField[];
   kontrakt?: MissionContract;
   instrukcja: string;
@@ -218,6 +221,8 @@ function sourcesBlock(sources: SearchSource[]): string {
 
 const RAPORT: MissionDef = {
   id: "raport",
+  ikona: "🔎",
+  krotko: "Temat → raport z faktami i źródłami z internetu",
   nazwa: "Raport",
   opis: "Wpisz temat – agent wyszuka informacje w internecie i przygotuje raport z faktami ze źródłami, tym, czego nie udało się ustalić, wnioskami i listą źródeł.",
   pola: [{ name: "temat", label: "Temat", maxLength: MAX_TOPIC_CHARS, placeholder: "np. Nowe przepisy o czujnikach dymu w Wielkiej Brytanii" }],
@@ -390,6 +395,8 @@ function comparisonData(pola: Record<string, string>): string {
 
 const COMPARISON: MissionDef = {
   id: "porownanie",
+  ikona: "⚖️",
+  krotko: "Trzy firmy → tabela i rekomendacja",
   nazwa: "Porównanie trzech firm",
   opis: "Wpisz trzy firmy lub produkty i kryteria – agent wyszuka informacje o każdej firmie i pokaże tabelę porównania z rekomendacją i źródłami.",
   pola: [
@@ -549,6 +556,8 @@ Zasady szkicu:
 
 const VISIT: MissionDef = {
   id: "wizyta",
+  ikona: "📋",
+  krotko: "Notatki → podsumowanie i szkic do klienta",
   nazwa: "Notatka z wizyty",
   opis: "Wklej notatki z oględzin albo serwisu – agent ułoży z nich podsumowanie, zalecenia i szkic wiadomości do klienta (ceny tylko z bazy wiedzy).",
   pola: [
@@ -591,9 +600,9 @@ const VISIT: MissionDef = {
 
 export const MISSIONS: MissionDef[] = [RAPORT, COMPARISON, VISIT];
 
-export type PublicMission = Pick<MissionDef, "id" | "nazwa" | "opis" | "pola" | "kontrakt" | "zapisuj">;
+export type PublicMission = Pick<MissionDef, "id" | "nazwa" | "opis" | "ikona" | "krotko" | "pola" | "kontrakt" | "zapisuj">;
 export function publicMissions(): PublicMission[] {
-  return MISSIONS.map(({ id, nazwa, opis, pola, kontrakt, zapisuj }) => ({ id, nazwa, opis, pola, ...(kontrakt ? { kontrakt } : {}), ...(zapisuj ? { zapisuj } : {}) }));
+  return MISSIONS.map(({ id, nazwa, opis, ikona, krotko, pola, kontrakt, zapisuj }) => ({ id, nazwa, opis, ikona, krotko, pola, ...(kontrakt ? { kontrakt } : {}), ...(zapisuj ? { zapisuj } : {}) }));
 }
 export function isSavedMission(id: unknown): boolean {
   return findMission(id)?.zapisuj === true;

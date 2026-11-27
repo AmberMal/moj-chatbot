@@ -32,8 +32,11 @@ export default async function UploadPage() {
 
   return (
     <main className="chat profile-page">
-      <div className="page-nav">
-        <Link href="/">← Wróć do czatu</Link>
+      {/* 27.11: powrót do czatu po prawej (kolumna przycisków), jak w Historii i Profilu */}
+      <div className="toolbar">
+        <Link href="/" className="logout logout-text">
+          ← Wróć do czatu
+        </Link>
       </div>
       <h1>Baza wiedzy</h1>
       {problem && (

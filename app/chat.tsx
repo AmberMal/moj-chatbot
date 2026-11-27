@@ -474,7 +474,7 @@ export default function Chat({
         <Link href="/misje" className="logout">
           Misje
         </Link>
-        <button type="button" className="logout" onClick={handleLogout}>
+        <button type="button" className="logout logout-exit" onClick={handleLogout}>
           Wyloguj
         </button>
       </div>

@@ -654,3 +654,87 @@ h1 { margin: 0; font-size: 26px; }
 .mission-run { width: 100%; text-align: left; padding: 8px 12px; border: 1px solid #e6e1d4; border-radius: 10px; background: #fff; font: inherit; cursor: pointer; }
 .mission-run span { color: var(--muted); }
 .mission-saved { margin: 0 0 8px; color: var(--muted); font-size: 0.9em; }
+
+/* 27.11 (po lekcji 8): na szerokim oknie przyciski czatu w kolumnie po prawej stronie, jeden pod drugim.
+   Rozmowa zostaje na środku (760 px); kolumna nie zasłania jej, bo pojawia się dopiero od 1240 px.
+   Na węższym oknie i telefonie – dotychczasowy poziomy pasek. */
+@media (min-width: 1240px) {
+  .toolbar {
+    position: fixed;
+    top: 24px;
+    right: 24px;
+    width: 200px;
+    max-height: calc(100dvh - 48px);
+    overflow-y: auto;
+    flex-direction: column;
+    flex-wrap: nowrap;
+    align-items: stretch;
+    justify-content: flex-start;
+    gap: 8px;
+    z-index: 10;
+  }
+  .toolbar .user-info { margin: 0 0 8px; }
+  /* Prostokątne kafelki z większą, grubszą czcionką */
+  .toolbar .logout {
+    justify-content: flex-start;
+    border-radius: 8px;
+    min-height: 44px;
+    padding: 10px 14px;
+    font-size: 16px;
+    font-weight: 600;
+  }
+  /* Żółte kafelki Amber (wybór Malwiny 27.11): żółte tło i czarny napis jak w logo */
+  .toolbar .logout { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+  .toolbar .logout:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
+  /* „Wyloguj” (logout-exit) – zwykły, jasny, z odstępem, żeby nie kliknąć go przypadkiem */
+  .toolbar .logout-exit { margin-top: 16px; background: var(--surface); border-color: var(--border); color: var(--ink); }
+  .toolbar .logout-exit:hover:not(:disabled) { background: var(--accent-soft); border-color: var(--accent-hover); }
+}
+
+/* 27.11: w Historii „Nowa rozmowa” – kolor tła logo Amber, czarny napis (na każdej szerokości okna) */
+.toolbar .logout-new { background: var(--accent); border-color: var(--accent); color: #000; font-weight: 600; justify-content: center; text-align: center; }
+.toolbar .logout-new:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
+/* „← Wróć do czatu” w Historii (wybór Malwiny 27.11): bez ramki, czarny pogrubiony tekst z grubą żółtą kreską w kolorze logo */
+.toolbar .logout-text,
+.toolbar .logout-text:hover:not(:disabled) { background: none; border: none; color: #000; font-weight: 700; padding-left: 0; padding-right: 0; }
+.toolbar .logout-text { align-self: center; justify-content: center; text-decoration: underline; text-decoration-color: var(--accent); text-decoration-thickness: 4px; text-underline-offset: 6px; }
+.toolbar .logout-text:hover { text-decoration-color: var(--accent-hover); }
+/* 27.11 – Baza wiedzy, wariant A: żółty „+ Dodaj dokument” i tabela dokumentów */
+.upload-add { align-self: flex-start; background: var(--accent); border-color: var(--accent); color: #000; font-weight: 600; border-radius: 8px; min-height: 40px; }
+.upload-add:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
+.upload-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.upload-table th { text-align: left; font-size: 13px; font-weight: 600; color: var(--muted); padding: 6px 8px; border-bottom: 1px solid var(--border); }
+.upload-table td { padding: 10px 8px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+.upload-table tr:last-child td { border-bottom: none; }
+.upload-table td:nth-child(2), .upload-table th:nth-child(2) { text-align: center; width: 90px; }
+.upload-table td:nth-child(3), .upload-table th:nth-child(3) { width: 150px; color: var(--muted); }
+.upload-table td:last-child { width: 70px; text-align: right; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+/* 27.11: „Nowa rozmowa” w Historii – pod tytułem (poza kolumną przycisków) */
+.history-new { align-self: flex-start; justify-content: center; background: var(--accent); border-color: var(--accent); color: #000; font-weight: 600; border-radius: 8px; min-height: 40px; text-decoration: none; }
+.history-new:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+/* 27.11 – Triage, wariant A: kolorowy pasek priorytetu, szkic rozwijany */
+.triage-card { border-left-width: 5px; border-radius: 0 12px 12px 0; gap: 6px; }
+.triage-card.prio-high { border-left-color: #e24b4a; }
+.triage-card.prio-mid { border-left-color: #ef9f27; }
+.triage-card.prio-low { border-left-color: #639922; }
+.triage-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
+.triage-prio { flex: none; display: inline-block; padding: 2px 10px; border-radius: 8px; font-size: 0.85rem; font-weight: 600; }
+.triage-prio.priority-high { background: #fcebeb; color: #791f1f; }
+.triage-prio.priority-mid { background: #faeeda; color: #633806; }
+.triage-prio.priority-low { background: #eaf3de; color: #27500a; }
+.triage-meta { margin: 0; color: var(--muted); font-size: 0.92rem; }
+.triage-cat { font-weight: 600; color: var(--ink); }
+.triage-details summary { cursor: pointer; font-weight: 600; font-size: 0.92rem; color: #8a6100; }
+.triage-details[open] summary { margin-bottom: 8px; }
+.triage-details .triage-source { margin-top: 6px; }
+.triage-copy { align-self: flex-start; }
+/* 27.11 – Misje, wygląd A + D: trzy kafelki w rzędzie (ikona, nazwa, krótki opis), wybrany żółty */
+.mission-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; }
+.mission-choice { align-items: center; text-align: center; gap: 4px; padding: 14px 12px; border: 1px solid var(--border); border-top: 5px solid var(--accent); border-radius: 0 0 12px 12px; }
+.mission-choice:hover:not(:disabled) { background: var(--accent-soft); }
+.mission-choice.active { background: var(--accent); border-color: var(--accent); box-shadow: none; }
+.mission-choice.active strong, .mission-choice.active span { color: #000; }
+.mission-icon { font-size: 26px; line-height: 1; }
+.mission-choice strong { font-size: 16px; }
+.mission-desc { margin: 0 0 8px; color: var(--muted); }

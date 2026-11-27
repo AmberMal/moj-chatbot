@@ -38,16 +38,18 @@ export default async function HistoryPage() {
 
   return (
     <main className="chat history-page">
-      <div className="page-nav">
-        <Link href="/">← Wróć do czatu</Link>
+      {/* 27.11: powrót do czatu po prawej (kolumna przycisków) */}
+      <div className="toolbar">
+        <Link href="/" className="logout logout-text">
+          ← Wróć do czatu
+        </Link>
       </div>
       <h1>Historia rozmów</h1>
       <>
-          <div className="toolbar">
-            <Link href="/?new=1" className="logout">
-              Nowa rozmowa
-            </Link>
-          </div>
+          {/* 27.11: „Nowa rozmowa” pod tytułem, w kolorze logo Amber */}
+          <Link href="/?new=1" className="logout logout-new history-new">
+            Nowa rozmowa
+          </Link>
           {problem && (
             <p className="error" role="alert">
               {problem}

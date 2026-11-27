@@ -86,27 +86,30 @@ export default function TriageForm() {
         <ol className="triage-cards">
           {cards.map((card) =>
             card.ok ? (
-              <li key={card.numer} className="triage-card">
-                <div className="triage-head">
-                  <span className="triage-from">{card.nadawca}</span>
-                  <span className="triage-subject">{card.temat}</span>
+              // 27.11 (wygląd, wariant A): kolorowy pasek priorytetu z lewej, szkic rozwijany, „Kopiuj szkic” zawsze widoczny.
+              <li key={card.numer} className={`triage-card prio-${priorityClass(card.priorytet)}`}>
+                <div className="triage-top">
+                  <div className="triage-head">
+                    <span className="triage-from">{card.nadawca}</span>
+                    <span className="triage-subject">{card.temat}</span>
+                  </div>
+                  <span className={`triage-prio pill priority-${priorityClass(card.priorytet)}`}>{card.priorytet}</span>
                 </div>
-                <div className="triage-tags">
-                  <span className="pill">{card.kategoria}</span>
-                  <span className={`pill priority-${card.priorytet === "wysoki" ? "high" : card.priorytet === "średni" ? "mid" : "low"}`}>
-                    priorytet: {card.priorytet}
-                  </span>
-                </div>
-                <p className="triage-reason">{card.uzasadnienie}</p>
-                <div className="triage-draft">{card.szkic}</div>
-                {/* Standard: dokumenty z bazy wiedzy, z których szkic skorzystał */}
-                {Array.isArray(card.zrodla) &&
-                  card.zrodla.map((title) => (
-                    <p key={title} className="triage-source">
-                      📎 Źródło: {title}
-                    </p>
-                  ))}
-                <button type="button" className="logout" onClick={() => copy(card)}>
+                <p className="triage-meta">
+                  <span className="triage-cat">{card.kategoria}</span> · {card.uzasadnienie}
+                </p>
+                <details className="triage-details">
+                  <summary>Pokaż szkic</summary>
+                  <div className="triage-draft">{card.szkic}</div>
+                  {/* Standard: dokumenty z bazy wiedzy, z których szkic skorzystał */}
+                  {Array.isArray(card.zrodla) &&
+                    card.zrodla.map((title) => (
+                      <p key={title} className="triage-source">
+                        📎 Źródło: {title}
+                      </p>
+                    ))}
+                </details>
+                <button type="button" className="logout triage-copy" onClick={() => copy(card)}>
                   {copied === card.numer ? "Skopiowano ✓" : "Kopiuj szkic"}
                 </button>
               </li>
@@ -126,6 +129,10 @@ export default function TriageForm() {
       )}
     </>
   );
+}
+
+function priorityClass(priorytet: string): "high" | "mid" | "low" {
+  return priorytet === "wysoki" ? "high" : priorytet === "średni" ? "mid" : "low";
 }
 
 // Standard: podsumowanie nad kartami – ile maili ma priorytet wysoki, średni i niski.

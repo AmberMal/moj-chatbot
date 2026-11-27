@@ -32,8 +32,11 @@ export default async function ProfilePage() {
 
   return (
     <main className="chat profile-page">
-      <div className="page-nav">
-        <Link href="/">← Wróć do czatu</Link>
+      {/* 27.11: powrót do czatu po prawej (kolumna przycisków), jak w Historii */}
+      <div className="toolbar">
+        <Link href="/" className="logout logout-text">
+          ← Wróć do czatu
+        </Link>
       </div>
       <h1>Profil klienta</h1>
       {problem && (

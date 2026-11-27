@@ -138,16 +138,22 @@ export default function MissionsForm({ missions }: { missions: PublicMission[] }
             onClick={() => choose(m.id)}
             disabled={pending}
           >
+            {/* 27.11 (wygląd, A + D): kafelki w rzędzie – ikona, nazwa, krótki opis; wybrany jest żółty */}
+            <span className="mission-icon" aria-hidden="true">
+              {m.ikona}
+            </span>
             <strong>{m.nazwa}</strong>
-            <span>{m.opis}</span>
+            <span>{m.krotko}</span>
           </button>
         ))}
       </div>
 
-      {mission?.kontrakt && (
-        // Standard (W3): kontrakt misji – cel, narzędzia, format wyniku, co sprawdzić przed użyciem.
+      {mission && (
+        // Nazwa i pełny opis wybranej misji; Standard (W3): kontrakt – cel, narzędzia, wynik, kontrola.
         <div className="mission-contract">
           <h2>{mission.nazwa}</h2>
+          <p className="mission-desc">{mission.opis}</p>
+          {mission.kontrakt && (
           <details>
             <summary>Jak działa ta misja</summary>
             <dl>
@@ -161,6 +167,7 @@ export default function MissionsForm({ missions }: { missions: PublicMission[] }
               <dd>{mission.kontrakt.kontrola}</dd>
             </dl>
           </details>
+          )}
         </div>
       )}
 
